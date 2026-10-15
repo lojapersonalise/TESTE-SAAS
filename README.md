@@ -1,8 +1,18 @@
-# TESTE-SAAS — Loja Personalise
+# OrganiFin — Organização & Finanças
 
 Cópia de `lojapersonalise/gestao-personalise`, baseada no commit
 `2d3d8f7fd16f3ca8cb33a102ff92e789a2e8a867`, configurada para o Firebase
 `copinha-8292b`.
+
+## Identidade e configuração do negócio
+
+O OrganiFin utiliza azul, ciano e verde, com categorias gerais para produtos,
+serviços, assinaturas e despesas operacionais. As categorias e as cores podem
+ser ajustadas no bloco `APP_CONFIG` de `index.html`.
+
+A coleção `banco_personalise` mantém seu nome técnico por compatibilidade com
+os registros e regras de acesso existentes. Alterar a identidade visual não
+modifica nem remove os dados já cadastrados.
 
 ## Executar localmente
 

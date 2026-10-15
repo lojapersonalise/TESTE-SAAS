@@ -9,6 +9,7 @@ function initThemeAndConfig() {
   root.style.setProperty('--px', APP_CONFIG.tema.px);
   root.style.setProperty('--bg', APP_CONFIG.tema.bg);
   root.style.setProperty('--bor', APP_CONFIG.tema.bor);
+  root.style.setProperty('--accent', APP_CONFIG.tema.accent);
   document.title = APP_CONFIG.nome_sistema;
 
   const setOpts = (id, arr) => { const el = document.getElementById(id); if(el) el.innerHTML = arr.map(i => `<option>${i}</option>`).join(''); };
@@ -93,7 +94,7 @@ const DB = {
 function getCols(){
   const c = DB.get(K.col);
   if(c && c.length) return c;
-  const d = [{id:'c0',nome:'Novo Pedido',fixa:true}, {id:'c1',nome:'Produção',fixa:false}];
+  const d = [{id:'c0',nome:'Novo Pedido',fixa:true}, {id:'c1',nome:'Em andamento',fixa:false}];
   DB.set(K.col, d);
   return d;
 }
@@ -110,7 +111,7 @@ async function iniciarApp() {
           MEM[k] = docSnap.data().lista || [];
       } else {
           if(k === K.col) {
-              MEM[k] = [{id:'c0',nome:'Novo Pedido',fixa:true}, {id:'c1',nome:'Produção',fixa:false}];
+              MEM[k] = [{id:'c0',nome:'Novo Pedido',fixa:true}, {id:'c1',nome:'Em andamento',fixa:false}];
               if(auth.currentUser) fbDB.collection('banco_personalise').doc(k).set({ lista: MEM[k] });
           } else {
               MEM[k] = [];
@@ -172,7 +173,7 @@ function calcLiq(val, pgto) {
 }
 
 function brlLq(bruto, liq) {
-    if(bruto > liq) return `<del style="color:#999;font-size:0.7rem">${brl(bruto)}</del><br><span style="color:var(--ok)">${brl(liq)}</span>`;
+    if(bruto > liq) return `<del style="color:var(--tl);font-size:0.7rem">${brl(bruto)}</del><br><span style="color:var(--ok)">${brl(liq)}</span>`;
     return brl(liq);
 }
 
@@ -250,7 +251,7 @@ function buildDash(){
 
   const saldoGeral = (allVendas + allAjustesPos) - (allCustos + allRetiradas + allAjustesNeg);
 
-  // LÓGICA DA GAVETA (TODO O DINHEIRO FÍSICO DA LOJA + AJUSTES EM DINHEIRO)
+  // LÓGICA DA GAVETA (TODO O DINHEIRO FÍSICO DO NEGÓCIO + AJUSTES EM DINHEIRO)
   const entDinheiro = vs.filter(v => v.pgto === 'Dinheiro').reduce((a,b) => a + Number(b.total), 0);
   const saiDinheiro = cs.filter(c => c.pgto === 'Dinheiro').reduce((a,b) => a + Number(b.valor), 0);
   const saldoDinheiro = entDinheiro - saiDinheiro;
@@ -293,14 +294,14 @@ function buildDash(){
   if(CHS['ch1'])CHS['ch1'].destroy();
   const elCh1 = document.getElementById('ch1');
   if(elCh1) {
-      CHS['ch1']=new Chart(elCh1.getContext('2d'),{type:'bar',data:{labels:lbM,datasets:[{label:'Vendas Líquidas',data:ms.map(m=>(DB.get(K.v)||[]).filter(v=>v.data.startsWith(m) && v.categoria !== 'Ajuste de caixa').reduce((a,v)=>a+Number(v.total||0),0)),backgroundColor:APP_CONFIG.tema.p,borderRadius:4},{label:'Custos Loja',data:ms.map(m=>(DB.get(K.c)||[]).filter(c=>c.data.startsWith(m)&&!['Retirada Pessoal','Pró-labore','Ajuste de caixa'].includes(c.categoria)).reduce((a,c)=>a+Number(c.valor||0),0)),backgroundColor:'#c62828',borderRadius:4}]},options:{responsive:true,maintainAspectRatio:false}});
+      CHS['ch1']=new Chart(elCh1.getContext('2d'),{type:'bar',data:{labels:lbM,datasets:[{label:'Vendas Líquidas',data:ms.map(m=>(DB.get(K.v)||[]).filter(v=>v.data.startsWith(m) && v.categoria !== 'Ajuste de caixa').reduce((a,v)=>a+Number(v.total||0),0)),backgroundColor:APP_CONFIG.tema.p,borderRadius:4},{label:'Custos do negócio',data:ms.map(m=>(DB.get(K.c)||[]).filter(c=>c.data.startsWith(m)&&!['Retirada Pessoal','Pró-labore','Ajuste de caixa'].includes(c.categoria)).reduce((a,c)=>a+Number(c.valor||0),0)),backgroundColor:APP_CONFIG.tema.chart[1],borderRadius:4}]},options:{responsive:true,maintainAspectRatio:false}});
   }
   
   const cats={};vs.filter(v=>v.categoria!=='Ajuste de caixa').forEach(v=>{const c=v.categoria||'Outros';cats[c]=(cats[c]||0)+Number(v.total||0);});
   if(CHS['ch2'])CHS['ch2'].destroy();
   const elCh2 = document.getElementById('ch2');
   if(elCh2) {
-      CHS['ch2']=new Chart(elCh2.getContext('2d'),{type:'pie',data:{labels:Object.keys(cats),datasets:[{data:Object.values(cats),backgroundColor:[APP_CONFIG.tema.p, APP_CONFIG.tema.pd, APP_CONFIG.tema.pl, APP_CONFIG.tema.bor, '#c9a0e0','#3f51b5']}]},options:{responsive:true,maintainAspectRatio:false}});
+      CHS['ch2']=new Chart(elCh2.getContext('2d'),{type:'pie',data:{labels:Object.keys(cats),datasets:[{data:Object.values(cats),backgroundColor:APP_CONFIG.tema.chart}]},options:{responsive:true,maintainAspectRatio:false}});
   }
 }
 
@@ -601,7 +602,7 @@ function delConc(id){conf('Excluir registro permanentemente?',()=>{DB.set(K.co,D
 // ── 6. VENDAS MANUAIS ──
 function calcV(){document.getElementById('vt').value=(Number(gv('vu')||0)*Number(gv('vq')||1)).toFixed(2);}
 function salvarV(){
-  const p=gv('vp').trim();if(!p)return toast('Preencha o produto!',true);
+  const p=gv('vp').trim();if(!p)return toast('Preencha o produto ou serviço!',true);
   const vs=DB.get(K.v)||[];
   let bruto = Number(gv('vt')||0); let pg = gv('vpg');
   let liq = calcLiq(bruto, pg);
