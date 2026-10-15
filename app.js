@@ -45,6 +45,8 @@ initThemeAndConfig();
 firebase.initializeApp(FIREBASE_CONFIG);
 const fbDB = firebase.firestore();
 const auth = firebase.auth();
+const storage = OrganiFinStorage.create(fbDB,FIREBASE_CONFIG.projectId);
+let storageView = {mode:'legacy',control:null};
 
 // Authentication, session lifetime and confirmed writes. The existing document
 // layout is retained; this is not a multi-company authorization boundary.
@@ -84,7 +86,7 @@ function clearSession() {
   firstLoad = true;
   saving = null;
   setSaving(false);
-  MEM = emptyStore();
+  MEM = emptyStore();storageView={mode:'legacy',control:null};
   cp = {co:1,v:1,c:1,e:1,cl:1,r:1};
   activeFilter = null; kbQ = ''; actPed = null; edColId = null;
   Object.values(CHS).forEach(chart => chart.destroy()); CHS = {};
@@ -99,7 +101,7 @@ function clearSession() {
   document.getElementById('toast').classList.remove('on');
   updDL();
 }
-function iniciarApp() {
+async function iniciarApp() {
   const user = auth.currentUser;
   clearSession();
   if (!user) return;
@@ -108,11 +110,36 @@ function iniciarApp() {
   document.getElementById('login-screen').style.display = 'none';
   document.getElementById('app-container').style.display = 'none';
   loading('Conectando e sincronizando...');
+  try {
+    const info=await storage.info();
+    if(version!==sessionVersion)return;
+    storageView=info;
+    if(info.mode==='migrating'){
+      loading('O banco está sendo atualizado. Aguarde a conclusão e tente novamente.',true);return;
+    }
+    if(info.mode==='ready'){
+      subscriptions.push(storage.watchReady(view=>{
+        if(version!==sessionVersion)return;
+        if(storageView.control?.datasetId===view.control.datasetId&&storageView.control.revision>view.control.revision)return;
+        storageView=view;MEM=clone(view.state);
+        if(firstLoad)finishStartup();else if(!saving)atualizarTelaAtual();
+      },error=>{if(version===sessionVersion){sessionReady=false;loading(error.userMessage||'Não foi possível sincronizar os dados. Tente novamente.',true);}}));
+      return;
+    }
+  } catch(error){if(version===sessionVersion)loading(error.userMessage||'Não foi possível conectar ao banco. Tente novamente.',true);return;}
+  function finishStartup(){
+    firstLoad=false;sessionReady=true;
+    document.getElementById('app-container').style.display='block';
+    document.getElementById('loader').classList.add('off');
+    document.getElementById('vq').value='1';document.getElementById('eq').value='0';document.getElementById('em').value='5';
+    document.getElementById('vd').value=hj();document.getElementById('cd').value=hj();
+    goTo(1);initDragToScroll();
+  }
   Object.values(K).forEach(key => {
     const unsubscribe = fbDB.collection('banco_personalise').doc(key).onSnapshot({includeMetadataChanges:true}, snapshot => {
       if (version !== sessionVersion) return;
       if (snapshot.metadata.hasPendingWrites || snapshot.metadata.fromCache) return;
-      const data = snapshot.exists ? snapshot.data().lista : (key === K.col ? defaultColumns() : []);
+      const data = snapshot.exists ? snapshot.data().lista : [];
       if (!Array.isArray(data) || data.some(item => !item || typeof item !== 'object' || Array.isArray(item))) {
         sessionReady = false; firstLoad = true; loaded.delete(key);
         loading('Há dados em formato inválido. O carregamento foi interrompido para proteger os registros.', true);
@@ -121,15 +148,7 @@ function iniciarApp() {
       MEM[key] = clone(data);
       loaded.add(key);
       if (loaded.size === Object.keys(K).length && firstLoad) {
-        firstLoad = false; sessionReady = true;
-        document.getElementById('app-container').style.display = 'block';
-        document.getElementById('loader').classList.add('off');
-        document.getElementById('vq').value = '1';
-        document.getElementById('eq').value = '0';
-        document.getElementById('em').value = '5';
-        document.getElementById('vd').value = hj();
-        document.getElementById('cd').value = hj();
-        goTo(1); initDragToScroll();
+        finishStartup();
       } else if (sessionReady && !saving) atualizarTelaAtual();
     }, error => {
       if (version !== sessionVersion) return;
@@ -151,14 +170,16 @@ async function alterar(mutator, message = 'Salvo na nuvem.', after = () => {}) {
     mutator(state);
     const changed = Object.values(K).filter(key => JSON.stringify(state[key]) !== JSON.stringify(before[key]));
     if (!changed.length) return false;
-    // One commit acknowledges all parts of this action. Whole-list concurrency
-    // and the document size limit remain architectural limitations.
-    const batch = fbDB.batch();
-    changed.forEach(key => batch.set(fbDB.collection('banco_personalise').doc(key), {lista:state[key]}));
-    await batch.commit();
+    const committedView=await storage.commit(storageView,before,state);
     if (version !== sessionVersion || auth.currentUser?.uid !== userId) return false;
     committed = true;
-    changed.forEach(key => {MEM[key] = state[key];});
+    const newerView=committedView.mode==='ready'&&storageView.mode==='ready'&&storageView.control.datasetId===committedView.control.datasetId&&storageView.control.revision>committedView.control.revision;
+    if(!newerView){
+      storageView=committedView;
+      // Legacy server listeners are ordered per document; never replace a more
+      // recent confirmed snapshot with this action's older local copy.
+      if(committedView.mode==='ready')changed.forEach(key=>{MEM[key]=state[key];});
+    }
     after();
     if (message) toast(message);
     return true;

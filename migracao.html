@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Atualizar banco — OrganiFin</title>
+<link rel="stylesheet" href="style.css?v=armazenamento-2">
+<style>
+body{display:block}.migration{max-width:780px;margin:32px auto;padding:24px;background:#fff;border-radius:12px;box-shadow:var(--sh)}.migration h1,.migration h2{color:var(--pd);margin:18px 0 12px}.migration p,.migration li{line-height:1.6;margin:10px 0}.migration input{margin:8px 0}.migration button{margin:8px 8px 8px 0}.migration ol{padding-left:24px}#migration-status{white-space:pre-wrap;padding:16px;background:var(--px);border-radius:8px;margin-top:18px}.confirm-backup{display:flex;gap:10px;align-items:center}.confirm-backup input{width:auto}@media(max-width:660px){.migration{margin:12px;padding:18px}}
+</style>
+</head>
+<body>
+<main class="migration">
+<h1>Atualizar o banco do OrganiFin</h1>
+<p>Esta ferramenta mantém os registros antigos e prepara o armazenamento por lançamento. Use durante uma pausa nos lançamentos, com todas as outras abas e dispositivos fechados.</p>
+<div id="migration-login">
+<label for="migration-email">E-mail do proprietário</label><input id="migration-email" type="email" autocomplete="username">
+<label for="migration-password">Senha</label><input id="migration-password" type="password" autocomplete="current-password">
+<button id="migration-signin" class="btn bp" type="button">Entrar</button>
+</div>
+<section id="migration-owner" hidden>
+<p id="migration-project"></p>
+<ol>
+<li>Publique no projeto <strong>copinha-8292b</strong> as regras de <code>firestore.rules</code> fornecidas no repositório.</li>
+<li>Exporte o backup e guarde o arquivo no seu computador. O arquivo contém seus dados comerciais; não o envie ao repositório.</li>
+<li>Selecione o backup salvo, confirme que o guardou e inicie a atualização.</li>
+</ol>
+<button id="migration-inspect" class="btn out" type="button">Verificar situação</button>
+<button id="migration-export" class="btn bp" type="button">Exportar backup</button>
+<label for="migration-file">Backup salvo no computador</label><input id="migration-file" type="file" accept=".json,application/json">
+<label class="confirm-backup"><input id="migration-confirm" type="checkbox">Guardei o backup e ninguém está fazendo lançamentos.</label>
+<button id="migration-run" class="btn bs" type="button">Iniciar ou retomar atualização</button>
+<button id="migration-cancel" class="btn out" type="button">Cancelar atualização incompleta</button>
+<button id="migration-signout" class="btn out" type="button">Sair</button>
+<p>A atualização só é ativada depois da conferência completa com o backup. Se for interrompida, use o mesmo arquivo para retomar. Cancelar uma atualização incompleta reabre o banco antigo; essa opção não reverte uma atualização já ativada.</p>
+</section>
+<p id="migration-status" role="status">Conectando...</p>
+<p><a href="index.html">Voltar ao sistema</a></p>
+</main>
+<script src="vendor/firebase-app-compat.js" integrity="sha384-3k8kxVAXIf47vgdf3Q4mXcBDdvMrYx80aK5RjODMB70JWXm6MEkDdtSu0zpHWpJ+"></script>
+<script src="vendor/firebase-firestore-compat.js" integrity="sha384-s3q5cinzvUVPMs5hsRxxJ/jMi6Ucz3jx9oZDEe6slHehCV56eHHqTx61zwoC9YVy"></script>
+<script src="vendor/firebase-auth-compat.js" integrity="sha384-uic5NV27Y056/arxaoI4ZEI+gCZOns0NP+6MM8z+eGF1ba9Lifv7ZHI+IdxTDYQn"></script>
+<script src="firebase-config.js?v=2"></script>
+<script src="storage.js?v=2"></script>
+<script src="migracao.js?v=2"></script>
+</body>
+</html>

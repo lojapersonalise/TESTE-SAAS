@@ -46,15 +46,7 @@ const APP_CONFIG = {
 // =========================================================================
 // 🔑 2. CHAVES DO BANCO DE DADOS (FIREBASE ORGANIFIN)
 // =========================================================================
-const FIREBASE_CONFIG = {
-  apiKey: "AIzaSyBfqAdDgz3HeY8vFjC8WGr7d3-bc9x1nb4",
-  authDomain: "copinha-8292b.firebaseapp.com",
-  projectId: "copinha-8292b",
-  storageBucket: "copinha-8292b.firebasestorage.app",
-  messagingSenderId: "342549597068",
-  appId: "1:342549597068:web:80939f753f083568c0e4a9",
-  measurementId: "G-NXL5XC7Q6B"
-};
+
 </script>
 </head>
 <body>
@@ -307,7 +299,9 @@ const FIREBASE_CONFIG = {
 <div class="mo" id="mrc"><div class="sm-box"><h3>✏️ Renomear Coluna</h3><input id="rcn" type="text" maxlength="26"/><div class="ma"><button class="btn sm" style="background:var(--neutral-bg)" onclick="CM('mrc')">Cancelar</button><button class="btn bp sm" onclick="renCol()">✅ Salvar</button></div></div></div>
 <div class="mo" id="mcf"><div class="sm-box"><h3>⚠️ Confirmar</h3><p id="cfm">Deseja continuar?</p><div class="ma"><button class="btn sm" style="background:var(--neutral-bg)" onclick="CM('mcf')">Cancelar</button><button class="btn bd sm" id="cfo">Confirmar</button></div></div></div>
 
-<script src="app.js?v=correcoes-1"></script>
+<script src="firebase-config.js?v=2"></script>
+<script src="storage.js?v=2"></script>
+<script src="app.js?v=armazenamento-2"></script>
 
 </body>
 </html>

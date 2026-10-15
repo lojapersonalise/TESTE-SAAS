@@ -1,3 +1,8 @@
 node_modules/
 test-results/
 playwright-report/
+
+backups/
+*.organifin-backup.json
+*-debug.log
+.firebase/

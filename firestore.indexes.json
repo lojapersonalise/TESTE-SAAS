@@ -1,0 +1,40 @@
+{
+  "indexes": [],
+  "fieldOverrides": [
+    {
+      "collectionGroup": "pedidos",
+      "fieldPath": "registro",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "concluidos",
+      "fieldPath": "registro",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "colunas",
+      "fieldPath": "registro",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "vendas",
+      "fieldPath": "registro",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "compras",
+      "fieldPath": "registro",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "estoque",
+      "fieldPath": "registro",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "clientes",
+      "fieldPath": "registro",
+      "indexes": []
+    }
+  ]
+}

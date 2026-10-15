@@ -30,7 +30,8 @@ autenticação e banco do Firebase precisam de internet.
 
 ## Firebase
 
-A configuração web está em `FIREBASE_CONFIG`, no `index.html`.
+A configuração web está em `FIREBASE_CONFIG`, no arquivo compartilhado
+`firebase-config.js`. O sistema e a ferramenta de migração usam o mesmo projeto.
 A aplicação mantém a API compat do Firebase já usada no código original;
 não é necessário substituir os scripts por imports npm. O `measurementId`
 foi incluído na configuração, mas o Analytics não é inicializado pelo sistema.
@@ -40,7 +41,8 @@ No console do projeto `copinha-8292b`, configure:
 - Authentication com o provedor E-mail/senha e os usuários que poderão entrar.
 - Os domínios de desenvolvimento e de hospedagem em Authentication → Settings → Authorized domains.
 - Cloud Firestore com regras de acesso adequadas aos usuários autorizados.
-  A aplicação lê e grava documentos na coleção `banco_personalise`.
+  Antes da migração, a aplicação usa `banco_personalise`. A estrutura por
+  registro e a ativação estão descritas em [ATUALIZAR-FIREBASE.md](ATUALIZAR-FIREBASE.md).
 
 A cópia usa o novo projeto: usuários, registros, regras e configurações do
 projeto antigo não são transferidos por esta alteração.
@@ -69,8 +71,9 @@ no novo Firebase. Não use credenciais do projeto original.
 - O salvamento aguarda a confirmação do Firestore. Enquanto houver uma gravação
   em andamento, novas alterações ficam bloqueadas. Falhas mantêm os campos e
   não apresentam a operação como concluída.
-- As partes de uma mesma ação são enviadas em um único lote do Firestore, com
-  o mesmo formato `{ lista: [...] }` dos documentos existentes.
+- As partes de uma mesma ação são enviadas em uma transação do Firestore.
+  Antes da migração, ela mantém o formato `{ lista: [...] }`; depois, grava
+  apenas os documentos alterados e a revisão de concorrência.
 - Sessões encerradas removem as assinaturas e os dados da interface. Respostas
   de uma sessão antiga não repovoam a memória de uma sessão nova.
 - Quantidades, valores, sinal, datas, opções e e-mails são validados no cliente.
@@ -115,19 +118,27 @@ Se já houver Chromium no ambiente:
 CHROMIUM_PATH=/usr/bin/chromium npm test
 ```
 
-Os testes usam um servidor local e um substituto determinístico do Firebase.
+O comando `npm test` usa um servidor local e um substituto determinístico do Firebase.
 Eles não enviam e-mails, não autenticam usuários reais e não acessam registros
 de produção. Cobrem falhas de gravação, entradas maliciosas, estoque, vínculos,
 arredondamento, clientes, sessão, recuperação de senha, integridade das
 bibliotecas e as telas em computador e celular.
 
-## Limitações que permanecem fora desta alteração
+## Banco de uma única empresa: transações e armazenamento por registro
 
-A estrutura ainda usa listas dentro de sete documentos compartilhados. Ela
-não implementa isolamento por empresa, controle de conflitos entre dispositivos,
-nem remove o limite de tamanho por documento do Firestore. Também não introduz
-perfis de acesso ou auditoria de alterações.
+A proteção contra gravações simultâneas também funciona no banco antigo, antes
+mesmo da migração. O novo formato guarda um documento por registro e utiliza
+transações com revisão para recusar alterações feitas sobre dados desatualizados.
+As listas originais não são apagadas.
 
-As regras comerciais atuais de arquivar pedidos não pagos, registrar fiado
-no saldo e editar recebimentos de pedidos pagos foram preservadas. A revisão
-desses comportamentos e a migração de estrutura exigem uma etapa separada.
+A mudança de formato não acontece automaticamente. Siga o guia
+[ATUALIZAR-FIREBASE.md](ATUALIZAR-FIREBASE.md) para publicar as regras, guardar o
+backup e executar a ferramenta [migracao.html](migracao.html). A ferramenta
+confere a cópia antes de ativá-la e permite retomar uma atualização interrompida.
+
+As regras prontas autorizam apenas o UID do proprietário já informado. O banco
+continua sendo de uma única empresa; não há perfis de equipe ou auditoria.
+
+As regras comerciais atuais de arquivar pedidos não pagos, registrar fiado no
+saldo e editar recebimentos de pedidos pagos foram preservadas. A revisão
+desses comportamentos continua sendo uma etapa separada.

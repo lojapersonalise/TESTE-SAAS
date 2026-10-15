@@ -1,0 +1,71 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function owner() { return request.auth != null && request.auth.uid == 'OJqtwDYPETUWegYndXmSnRiyNXR2'; }
+    function category(key) { return key in ['pedidos','concluidos','colunas','vendas','compras','estoque','clientes']; }
+    function controlPath() { return /databases/$(database)/documents/organifin_config/estado; }
+    function validCounts(c) {
+      return c is map && c.keys().hasAll(['pedidos','concluidos','colunas','vendas','compras','estoque','clientes'])
+        && c.keys().hasOnly(['pedidos','concluidos','colunas','vendas','compras','estoque','clientes'])
+        && c.pedidos is int && c.pedidos >= 0 && c.concluidos is int && c.concluidos >= 0
+        && c.colunas is int && c.colunas >= 0 && c.vendas is int && c.vendas >= 0
+        && c.compras is int && c.compras >= 0 && c.estoque is int && c.estoque >= 0
+        && c.clientes is int && c.clientes >= 0;
+    }
+    function validControl(d) {
+      return d.keys().hasAll(['schemaVersion','status','datasetId','revision','counts','sourceHash','projectId','startedAt','completedAt'])
+        && d.keys().hasOnly(['schemaVersion','status','datasetId','revision','counts','sourceHash','projectId','startedAt','completedAt'])
+        && d.schemaVersion == 2 && d.status in ['migrating','ready']
+        && d.datasetId is string && d.datasetId.matches('^[A-Za-z0-9_-]{1,100}$')
+        && d.revision is int && d.revision >= 0 && validCounts(d.counts)
+        && d.sourceHash is string && d.sourceHash.matches('^[a-f0-9]{64}$')
+        && d.projectId == 'copinha-8292b' && d.startedAt is string
+        && (d.completedAt == null || d.completedAt is string);
+    }
+    match /banco_personalise/{key} {
+      allow get: if owner() && category(key);
+      // Old clients are fenced out as soon as migration starts.
+      allow create, update: if owner() && category(key) && !exists(controlPath())
+        && request.resource.data.keys().hasOnly(['lista']) && request.resource.data.lista is list;
+      allow list, delete: if false;
+    }
+    match /organifin_config/estado {
+      allow get: if owner();
+      allow list: if false;
+      allow create: if owner() && validControl(request.resource.data)
+        && request.resource.data.status == 'migrating' && request.resource.data.revision == 0
+        && request.resource.data.completedAt == null;
+      allow update: if owner() && validControl(request.resource.data) && (
+        (resource.data.status == 'migrating' && request.resource.data.status == 'ready'
+          && request.resource.data.completedAt is string
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','completedAt']))
+        || (resource.data.status == 'ready' && request.resource.data.status == 'ready'
+          && request.resource.data.revision == resource.data.revision + 1
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['revision','counts']))
+      );
+      allow delete: if owner() && resource.data.status == 'migrating';
+    }
+    match /organifin_dados/{dataset}/{key}/{id} {
+      function active() { return exists(controlPath()) && get(controlPath()).data.datasetId == dataset; }
+      function migration() { return get(controlPath()).data.status == 'migrating'; }
+      function advance() {
+        return get(controlPath()).data.status == 'ready'
+          && getAfter(controlPath()).data.status == 'ready'
+          && getAfter(controlPath()).data.datasetId == dataset
+          && getAfter(controlPath()).data.revision == get(controlPath()).data.revision + 1;
+      }
+      function validRecord() {
+        return request.resource.data.keys().hasOnly(['registro','ordem','revisao'])
+          && request.resource.data.registro is map && request.resource.data.registro.id is string
+          && request.resource.data.registro.id.size() > 0 && request.resource.data.registro.id.size() <= 512
+          && request.resource.data.ordem is number && request.resource.data.ordem >= -1000000000000000 && request.resource.data.ordem <= 1000000000000000
+          && request.resource.data.revisao is int;
+      }
+      allow get, list: if owner() && category(key) && active();
+      allow create, update: if owner() && category(key) && active() && validRecord()
+        && ((migration() && request.resource.data.revisao == 0)
+          || (advance() && request.resource.data.revisao == getAfter(controlPath()).data.revision));
+      allow delete: if owner() && category(key) && active() && advance();
+    }
+  }
+}
