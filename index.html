@@ -7,13 +7,13 @@
 
 <link rel="icon" href="borboletacima.png?v=organifin-1" type="image/png">
 
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=correcoes-1">
 
-<script src="https://www.gstatic.com/firebasejs/10.8.1/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.8.1/firebase-auth-compat.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/sortablejs@latest/Sortable.min.js"></script>
+<script src="vendor/firebase-app-compat.js" integrity="sha384-3k8kxVAXIf47vgdf3Q4mXcBDdvMrYx80aK5RjODMB70JWXm6MEkDdtSu0zpHWpJ+"></script>
+<script src="vendor/firebase-firestore-compat.js" integrity="sha384-s3q5cinzvUVPMs5hsRxxJ/jMi6Ucz3jx9oZDEe6slHehCV56eHHqTx61zwoC9YVy"></script>
+<script src="vendor/firebase-auth-compat.js" integrity="sha384-uic5NV27Y056/arxaoI4ZEI+gCZOns0NP+6MM8z+eGF1ba9Lifv7ZHI+IdxTDYQn"></script>
+<script src="vendor/chart.umd.min.js" integrity="sha384-NrKB+u6Ts6AtkIhwPixiKTzgSKNblyhlk0Sohlgar9UHUBzai/sgnNNWWd291xqt"></script>
+<script src="vendor/Sortable.min.js" integrity="sha384-DgmC6Xe2bSN2WjTDXzWYbUbxyhNP+NNkGDR/g78pCXV7E7rcVTGxVg0uIVCUUcBc"></script>
 
 <script>
 // =========================================================================
@@ -61,20 +61,24 @@ const FIREBASE_CONFIG = {
 
 <div id="loader">
   <img src="logo-personalise.png?v=organifin-1" alt="OrganiFin — Organização e Finanças" class="loader-logo" onerror="this.src=''" />
-  <p id="loader-text" style="color:var(--tl); font-size: 0.95rem;">Conectando e sincronizando...</p>
+  <p id="loader-text" role="status" style="color:var(--tl); font-size: 0.95rem;">Conectando e sincronizando...</p>
+  <div id="loader-actions" hidden><button type="button" class="btn bp" onclick="iniciarApp()">Tentar novamente</button> <button type="button" class="btn out" onclick="fazerLogout()">Voltar ao login</button></div>
 </div>
 
 <div id="login-screen" style="display:none;">
   <div class="login-box">
     <img src="logo-personaliselogin.png?v=organifin-1" alt="OrganiFin — Organização e Finanças" onerror="this.src=''" />
     <p>Organização e finanças para o seu negócio</p>
-    <input type="email" id="log-email" placeholder="Seu E-mail" />
-    <input type="password" id="log-pass" placeholder="Sua Senha" />
-    <button onclick="fazerLogin()">Entrar no Sistema</button>
-    <p id="login-error">Credenciais inválidas.</p>
+    <input type="email" id="log-email" placeholder="Seu E-mail" aria-label="Seu e-mail" autocomplete="username" required />
+    <input type="password" id="log-pass" placeholder="Sua Senha" aria-label="Sua senha" autocomplete="current-password" />
+    <button id="login-submit" type="button" onclick="fazerLogin()">Entrar no Sistema</button>
+    <button id="reset-password" type="button" onclick="recuperarSenha()">Esqueci minha senha</button>
+    <p id="login-feedback" role="status"></p>
+    <p id="login-error" role="alert">Credenciais inválidas.</p>
   </div>
 </div>
 
+<div id="save-status" role="status" hidden>Salvando na nuvem… aguarde a confirmação.</div>
 <div id="app-container">
 
 <div id="sb">
@@ -161,6 +165,7 @@ const FIREBASE_CONFIG = {
   <h2 class="ttl">💰 Vendas</h2>
   <div class="fc">
     <div class="fg-grid">
+<div class="fg fl"><label for="vcliente-id">Cliente cadastrado (opcional)</label><select id="vcliente-id" onchange="escolherCliente('v',this.value)"><option value="">Selecione um cadastro (opcional)</option></select></div>
       <div class="fg"><label>Cliente</label><input id="vc" type="text" list="vcl"/><datalist id="vcl"></datalist></div>
       <div class="fg"><label>Produto/Serviço *</label><input id="vp" type="text"/></div>
       <div class="fg"><label>Categoria</label><select id="vcat"></select></div>
@@ -234,7 +239,7 @@ const FIREBASE_CONFIG = {
   </div>
   <div class="fb"><input id="fclb" type="text" placeholder="🔍 Buscar por nome ou celular..." oninput="mudarPagCl(0)"/></div>
   <div class="tc">
-    <table><thead><tr><th>Nome</th><th>WhatsApp</th><th>Cidade</th><th>Ações</th></tr></thead>
+    <table><thead><tr><th>Nome</th><th>WhatsApp</th><th>E-mail</th><th>Cidade</th><th>Ações</th></tr></thead>
     <tbody id="tbcl"></tbody></table>
     <div id="cl-pag"></div>
   </div>
@@ -267,6 +272,7 @@ const FIREBASE_CONFIG = {
 </div></div><div id="toast"></div>
 
 <div class="mo" id="mnp"><div class="mb"><div class="mh"><h3>✨ Novo Pedido</h3><button class="mc" onclick="CM('mnp')">✕</button></div><div class="my"><div class="fg-grid" style="gap:9px">
+<div class="fg fl"><label for="ifcliente-id">Cliente cadastrado (opcional)</label><select id="ifcliente-id" onchange="escolherCliente('if',this.value)"><option value="">Selecione um cadastro (opcional)</option></select></div>
   <div class="fg fl"><label>Cliente *</label><input id="ifc" type="text" placeholder="Nome" list="ifcl" autocomplete="off" oninput="autoFillTel()"/><datalist id="ifcl"></datalist></div>
   <div class="fg fl"><label>Descrição *</label><textarea id="ifd" placeholder="Ex.: venda de produtos ou prestação de serviços"></textarea></div>
   <div class="fg"><label>Valor total bruto (R$)</label><input id="ifv" type="number" step="0.01"/></div>
@@ -283,11 +289,12 @@ const FIREBASE_CONFIG = {
   <div class="tr2"><div><div class="tl2">📦 Entregue</div></div><label class="tg"><input type="checkbox" id="mpeg" onchange="togF('entregue')"><span class="sl"></span></label></div>
 </div><div class="mf"><button class="btn bd sm" onclick="delPA()">🗑️ Excluir</button><button class="btn out sm" onclick="editPA()">✏️ Editar</button><button class="btn bs sm" onclick="abrirLV()">📦 Finalizar / Arquivar</button></div></div></div>
 
-<div class="mo" id="mhc"><div class="mb" style="max-width:600px"><div class="mh"><h3 id="mhctt">👁️ Histórico</h3><button class="mc" onclick="CM('mhc')">✕</button></div><div class="my"><div class="tc" style="box-shadow:none; padding:0;"><table style="min-width:auto;"><thead><tr><th>Data</th><th>Desc</th><th>Valor Bruto</th><th>Status</th></tr></thead><tbody id="tbhc"></tbody></table></div></div><div class="mf"><button class="btn sm" style="background:var(--neutral-bg)" onclick="CM('mhc')">Fechar</button></div></div></div>
+<div class="mo" id="mhc"><div class="mb" style="max-width:600px"><div class="mh"><h3 id="mhctt">👁️ Histórico</h3><button class="mc" onclick="CM('mhc')">✕</button></div><div class="my"><p id="history-warning" hidden>Existem clientes com este nome. Registros antigos sem identificação não foram atribuídos automaticamente.</p><div class="tc" style="box-shadow:none; padding:0;"><table style="min-width:auto;"><thead><tr><th>Data</th><th>Desc</th><th>Valor Bruto</th><th>Status</th></tr></thead><tbody id="tbhc"></tbody></table></div></div><div class="mf"><button class="btn sm" style="background:var(--neutral-bg)" onclick="CM('mhc')">Fechar</button></div></div></div>
 
 <div class="mo" id="mlv"><div class="mb" style="max-width:430px"><div class="mh" style="color:var(--ok)"><h3>📦 Finalizar e Arquivar</h3><button class="mc" onclick="CM('mlv')">✕</button></div><div class="my"><p style="font-size:.82rem;margin-bottom:12px;color:var(--tl)">O pedido irá para os <strong>Concluídos</strong>. Os recebimentos (Sinal e Pagamento) são lançados automaticamente na aba Vendas e abatidos das taxas da maquininha.</p><div class="fg-grid" style="gap:9px"><div class="fg fl" style="display:none;"><label>Produto/Serviço</label><input id="lvp" type="text"/></div><div class="fg" style="display:none;"><label>Valor pendente a lançar</label><input id="lvt" type="number" step="0.01"/></div><div class="fg fl"><label>📦 Abater estoque (opcional)</label><select id="lvest" onchange="document.getElementById('lvqw').style.display=this.value?'block':'none'"><option value="">— Não abater —</option></select></div><div class="fg" id="lvqw" style="display:none"><label>Qtd a abater</label><input id="lvq" type="number" min="1" value="1"/></div></div></div><div class="mf"><button class="btn sm" style="background:var(--neutral-bg)" onclick="CM('mlv')">Cancelar</button><button class="btn bs sm" onclick="confLV()">✅ Arquivar Pedido</button></div></div></div>
 
 <div class="mo" id="mep"><div class="mb"><div class="mh" style="color:var(--in)"><h3>✏️ Editar Pedido</h3><button class="mc" onclick="CM('mep')">✕</button></div><div class="my"><div class="fg-grid" style="gap:9px">
+<div class="fg fl"><label for="epcliente-id">Cliente cadastrado (opcional)</label><select id="epcliente-id" onchange="escolherCliente('ep',this.value)"><option value="">Selecione um cadastro (opcional)</option></select></div>
   <div class="fg"><label>Cliente *</label><input id="epc" type="text"/></div>
   <div class="fg"><label>WhatsApp</label><input id="ept" type="text"/></div>
   <div class="fg"><label>Data de entrega</label><input id="epe" type="date"/></div>
@@ -300,7 +307,7 @@ const FIREBASE_CONFIG = {
 <div class="mo" id="mrc"><div class="sm-box"><h3>✏️ Renomear Coluna</h3><input id="rcn" type="text" maxlength="26"/><div class="ma"><button class="btn sm" style="background:var(--neutral-bg)" onclick="CM('mrc')">Cancelar</button><button class="btn bp sm" onclick="renCol()">✅ Salvar</button></div></div></div>
 <div class="mo" id="mcf"><div class="sm-box"><h3>⚠️ Confirmar</h3><p id="cfm">Deseja continuar?</p><div class="ma"><button class="btn sm" style="background:var(--neutral-bg)" onclick="CM('mcf')">Cancelar</button><button class="btn bd sm" id="cfo">Confirmar</button></div></div></div>
 
-<script src="app.js"></script>
+<script src="app.js?v=correcoes-1"></script>
 
 </body>
 </html>

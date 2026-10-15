@@ -1,0 +1,32 @@
+[
+  {
+    "file": "firebase-app-compat.js",
+    "version": "10.8.1",
+    "url": "https://www.gstatic.com/firebasejs/10.8.1/firebase-app-compat.js",
+    "integrity": "sha384-3k8kxVAXIf47vgdf3Q4mXcBDdvMrYx80aK5RjODMB70JWXm6MEkDdtSu0zpHWpJ+"
+  },
+  {
+    "file": "firebase-firestore-compat.js",
+    "version": "10.8.1",
+    "url": "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore-compat.js",
+    "integrity": "sha384-s3q5cinzvUVPMs5hsRxxJ/jMi6Ucz3jx9oZDEe6slHehCV56eHHqTx61zwoC9YVy"
+  },
+  {
+    "file": "firebase-auth-compat.js",
+    "version": "10.8.1",
+    "url": "https://www.gstatic.com/firebasejs/10.8.1/firebase-auth-compat.js",
+    "integrity": "sha384-uic5NV27Y056/arxaoI4ZEI+gCZOns0NP+6MM8z+eGF1ba9Lifv7ZHI+IdxTDYQn"
+  },
+  {
+    "file": "chart.umd.min.js",
+    "version": "4.4.4",
+    "url": "https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js",
+    "integrity": "sha384-NrKB+u6Ts6AtkIhwPixiKTzgSKNblyhlk0Sohlgar9UHUBzai/sgnNNWWd291xqt"
+  },
+  {
+    "file": "Sortable.min.js",
+    "version": "1.15.7",
+    "url": "https://cdn.jsdelivr.net/npm/sortablejs@1.15.7/Sortable.min.js",
+    "integrity": "sha384-DgmC6Xe2bSN2WjTDXzWYbUbxyhNP+NNkGDR/g78pCXV7E7rcVTGxVg0uIVCUUcBc"
+  }
+]

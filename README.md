@@ -24,7 +24,9 @@ python3 -m http.server 8000 --bind 0.0.0.0
 ```
 
 O servidor deve entregar `index.html`, `app.js`, `style.css` e as imagens.
-A aplicação carrega Firebase 10.8.1, Chart.js e SortableJS pela internet.
+Firebase 10.8.1, Chart.js 4.4.4 e SortableJS 1.15.7 são servidos da pasta
+`vendor`, com versões fixas e verificação de integridade. Os serviços de
+autenticação e banco do Firebase precisam de internet.
 
 ## Firebase
 
@@ -58,3 +60,74 @@ No navegador, confirme que a tela de login aparece, sem erros de JavaScript,
 e que enviar o formulário vazio mostra “Preencha e-mail e senha.”.
 Uma validação completa de login e sincronização exige um usuário autorizado
 no novo Firebase. Não use credenciais do projeto original.
+
+
+## Correções de confiabilidade e segurança
+
+- Os cadastros são apresentados como texto; dados de usuários não são usados
+  como código JavaScript em botões e atributos de eventos.
+- O salvamento aguarda a confirmação do Firestore. Enquanto houver uma gravação
+  em andamento, novas alterações ficam bloqueadas. Falhas mantêm os campos e
+  não apresentam a operação como concluída.
+- As partes de uma mesma ação são enviadas em um único lote do Firestore, com
+  o mesmo formato `{ lista: [...] }` dos documentos existentes.
+- Sessões encerradas removem as assinaturas e os dados da interface. Respostas
+  de uma sessão antiga não repovoam a memória de uma sessão nova.
+- Quantidades, valores, sinal, datas, opções e e-mails são validados no cliente.
+  Isso não substitui as regras de autorização e validação do Firebase.
+- Baixas superiores ao estoque são recusadas antes de alterar pedidos ou
+  recebimentos; o desfazimento usa a quantidade registrada na baixa.
+- Exclusões de recebimentos atualizam pedidos abertos e arquivados, incluindo
+  a cópia usada para restaurar um pedido. Itens com baixas arquivadas não podem
+  ser excluídos enquanto o vínculo existir.
+- Valores líquidos são arredondados por lançamento; os totais usam esses
+  valores em centavos. Registros antigos com frações de centavo são arredondados
+  na apresentação e nas somas, sem regravação automática do histórico.
+- Novos vínculos usam `clienteId`. Clientes homônimos podem ser selecionados pelo
+  cadastro; registros antigos com nome ambíguo não são atribuídos silenciosamente.
+  Ao criar um segundo homônimo, vínculos antigos inequívocos são preservados.
+- O e-mail do cliente é salvo e exibido, e os relatórios têm cinco colunas
+  correspondentes ao cabeçalho.
+- A recuperação de senha usa o fluxo de e-mail do Firebase Authentication. O
+  envio real depende das configurações e da entrega de e-mail do projeto.
+
+Estoque: o código não consegue deduzir quanto foi realmente abatido em uma
+baixa antiga que já tenha sido registrada com quantidade incorreta. Esses
+registros históricos precisam de conferência antes de serem desfeitos. Uma
+baixa positiva sem o estoque anterior registrado é bloqueada no desfazimento,
+para não aumentar o saldo com base em uma quantidade que não pode ser comprovada.
+
+## Testes de regressão
+
+A aplicação em produção continua estática e não exige npm. Para executar os
+testes de desenvolvimento, use Node.js 22 ou superior:
+
+```sh
+npm ci
+npx playwright install chromium
+npm run check
+npm test
+```
+
+Se já houver Chromium no ambiente:
+
+```sh
+CHROMIUM_PATH=/usr/bin/chromium npm test
+```
+
+Os testes usam um servidor local e um substituto determinístico do Firebase.
+Eles não enviam e-mails, não autenticam usuários reais e não acessam registros
+de produção. Cobrem falhas de gravação, entradas maliciosas, estoque, vínculos,
+arredondamento, clientes, sessão, recuperação de senha, integridade das
+bibliotecas e as telas em computador e celular.
+
+## Limitações que permanecem fora desta alteração
+
+A estrutura ainda usa listas dentro de sete documentos compartilhados. Ela
+não implementa isolamento por empresa, controle de conflitos entre dispositivos,
+nem remove o limite de tamanho por documento do Firestore. Também não introduz
+perfis de acesso ou auditoria de alterações.
+
+As regras comerciais atuais de arquivar pedidos não pagos, registrar fiado
+no saldo e editar recebimentos de pedidos pagos foram preservadas. A revisão
+desses comportamentos e a migração de estrutura exigem uma etapa separada.

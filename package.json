@@ -1,0 +1,10 @@
+{
+  "name": "organifin",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "test": "node --test --test-concurrency=1 tests/*.test.cjs",
+    "check": "node --check app.js"
+  },
+  "devDependencies": {"playwright": "1.62.1"}
+}

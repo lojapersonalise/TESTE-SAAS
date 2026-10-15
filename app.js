@@ -12,10 +12,10 @@ function initThemeAndConfig() {
   root.style.setProperty('--accent', APP_CONFIG.tema.accent);
   document.title = APP_CONFIG.nome_sistema;
 
-  const setOpts = (id, arr) => { const el = document.getElementById(id); if(el) el.innerHTML = arr.map(i => `<option>${i}</option>`).join(''); };
+  const setOpts = (id, arr) => { const el = document.getElementById(id); if(el) el.innerHTML = arr.map(i => `<option>${esc(i)}</option>`).join(''); };
   
   // Injeta "Ajuste de caixa" nas Vendas
-  let vcatOpts = APP_CONFIG.categorias_vendas.map(i => `<option>${i}</option>`).join('');
+  let vcatOpts = APP_CONFIG.categorias_vendas.map(i => `<option>${esc(i)}</option>`).join('');
   vcatOpts += `<option style="color:var(--in); font-weight:bold;">Ajuste de caixa</option>`;
   const elVcat = document.getElementById('vcat');
   if(elVcat) elVcat.innerHTML = vcatOpts;
@@ -23,7 +23,7 @@ function initThemeAndConfig() {
   setOpts('ecat', APP_CONFIG.categorias_estoque);
   
   // Injeta "Ajuste de caixa", "Retirada" e "Pró-labore" nas Compras
-  let ccatOpts = APP_CONFIG.categorias_despesas.map(i => `<option>${i}</option>`).join('');
+  let ccatOpts = APP_CONFIG.categorias_despesas.map(i => `<option>${esc(i)}</option>`).join('');
   ccatOpts += `<option style="color:var(--wa); font-weight:bold;">Retirada Pessoal</option><option style="color:var(--wa); font-weight:bold;">Pró-labore</option><option style="color:var(--in); font-weight:bold;">Ajuste de caixa</option>`;
   const elCcat = document.getElementById('ccat');
   if(elCcat) elCcat.innerHTML = ccatOpts;
@@ -46,96 +46,214 @@ firebase.initializeApp(FIREBASE_CONFIG);
 const fbDB = firebase.firestore();
 const auth = firebase.auth();
 
-auth.onAuthStateChanged(user => {
-  if (user) {
-    document.getElementById('login-screen').style.display = 'none';
-    document.getElementById('app-container').style.display = 'block';
-    iniciarApp();
-  } else {
-    document.getElementById('loader').classList.add('off');
-    document.getElementById('app-container').style.display = 'none';
-    document.getElementById('login-screen').style.display = 'flex';
-  }
-});
-
-function fazerLogin() {
-  const email = document.getElementById('log-email').value;
-  const pass = document.getElementById('log-pass').value;
-  const err = document.getElementById('login-error');
-  err.style.display = 'none';
-  if(!email || !pass) { err.textContent = "Preencha e-mail e senha."; err.style.display = 'block'; return; }
-  auth.signInWithEmailAndPassword(email, pass).catch(e => {
-    err.textContent = "Erro: E-mail ou senha incorretos.";
-    err.style.display = 'block';
-  });
-}
-function fazerLogout() { auth.signOut(); }
-
+// Authentication, session lifetime and confirmed writes. The existing document
+// layout is retained; this is not a multi-company authorization boundary.
 const K = {p:'pedidos', co:'concluidos', col:'colunas', v:'vendas', c:'compras', e:'estoque', cl:'clientes'};
-let MEM = { [K.p]:[], [K.co]:[], [K.col]:[], [K.v]:[], [K.c]:[], [K.e]:[], [K.cl]:[] };
-
+const emptyStore = () => Object.fromEntries(Object.values(K).map(k => [k, []]));
+const clone = value => JSON.parse(JSON.stringify(value));
+const defaultColumns = () => [{id:'c0',nome:'Novo Pedido',fixa:true}, {id:'c1',nome:'Em andamento',fixa:false}];
+let MEM = emptyStore();
+const DB = {get: key => MEM[key] || []};
 const ITEMS_PER_PAGE = 5;
-let cp = { co:1, v:1, c:1, e:1, cl:1, r:1 }; 
-let activeFilter = null; 
-let kbQ = '';
-
-const DB = {
-  get: k => MEM[k] || [],
-  set: (k, v) => {
-    MEM[k] = v;
-    if(auth.currentUser) {
-      fbDB.collection('banco_personalise').doc(k).set({ lista: v }).catch(e => {
-          toast("Aviso: Falha ao salvar na nuvem.", true);
-      });
-    }
-  }
-};
-
-function getCols(){
-  const c = DB.get(K.col);
-  if(c && c.length) return c;
-  const d = [{id:'c0',nome:'Novo Pedido',fixa:true}, {id:'c1',nome:'Em andamento',fixa:false}];
-  DB.set(K.col, d);
-  return d;
-}
-
+let cp = {co:1,v:1,c:1,e:1,cl:1,r:1};
+let activeFilter = null, kbQ = '';
+let subscriptions = [], sessionVersion = 0, sessionReady = false;
+let saving = null, controlsBeforeSave = [];
 let firstLoad = true;
-async function iniciarApp() {
-  document.getElementById('loader').classList.remove('off'); 
-  let loaded = 0;
-  const keys = Object.values(K);
-  
-  keys.forEach(k => {
-    fbDB.collection('banco_personalise').doc(k).onSnapshot((docSnap) => {
-      if(docSnap.exists) {
-          MEM[k] = docSnap.data().lista || [];
-      } else {
-          if(k === K.col) {
-              MEM[k] = [{id:'c0',nome:'Novo Pedido',fixa:true}, {id:'c1',nome:'Em andamento',fixa:false}];
-              if(auth.currentUser) fbDB.collection('banco_personalise').doc(k).set({ lista: MEM[k] });
-          } else {
-              MEM[k] = [];
-          }
+
+function loading(message, failed = false) {
+  document.getElementById('loader-text').textContent = message;
+  document.getElementById('loader-actions').hidden = !failed;
+  document.getElementById('loader').classList.remove('off');
+}
+function setSaving(active) {
+  if (active) {
+    controlsBeforeSave = [...document.querySelectorAll('#app-container button,#app-container input,#app-container select,#app-container textarea,.mo button,.mo input,.mo select,.mo textarea')].map(el => [el, el.disabled]);
+    controlsBeforeSave.forEach(([el]) => {el.disabled = true;});
+  } else {
+    controlsBeforeSave.forEach(([el, disabled]) => {el.disabled = disabled;});
+    controlsBeforeSave = [];
+  }
+  document.getElementById('save-status').hidden = !active;
+}
+function clearSession() {
+  sessionVersion++;
+  subscriptions.forEach(unsubscribe => unsubscribe());
+  subscriptions = [];
+  sessionReady = false;
+  firstLoad = true;
+  saving = null;
+  setSaving(false);
+  MEM = emptyStore();
+  cp = {co:1,v:1,c:1,e:1,cl:1,r:1};
+  activeFilter = null; kbQ = ''; actPed = null; edColId = null;
+  Object.values(CHS).forEach(chart => chart.destroy()); CHS = {};
+  document.querySelectorAll('.mo').forEach(el => el.classList.remove('on'));
+  document.querySelectorAll('input,textarea').forEach(el => {el.value = ''; if(el.type === 'checkbox') el.checked = false;});
+  destroyBoardSortables();
+  ['kb','tbc','tbv','tbc2','tbe','tbcl','tbhc','tbrv','mpif','alerts','vcl','ifcl'].forEach(id => document.getElementById(id).replaceChildren());
+  document.querySelectorAll('.vl,.fi p').forEach(el => {el.textContent = '–';});
+  ['mhctt','dsr-ant','dsr-mes','cxeq','cxsq','cxmq','dvq','ddinq'].forEach(id=>document.getElementById(id).textContent='');
+  document.getElementById('login-error').style.display = 'none';
+  document.getElementById('login-feedback').textContent = '';
+  document.getElementById('toast').classList.remove('on');
+  updDL();
+}
+function iniciarApp() {
+  const user = auth.currentUser;
+  clearSession();
+  if (!user) return;
+  const version = sessionVersion;
+  const loaded = new Set();
+  document.getElementById('login-screen').style.display = 'none';
+  document.getElementById('app-container').style.display = 'none';
+  loading('Conectando e sincronizando...');
+  Object.values(K).forEach(key => {
+    const unsubscribe = fbDB.collection('banco_personalise').doc(key).onSnapshot({includeMetadataChanges:true}, snapshot => {
+      if (version !== sessionVersion) return;
+      if (snapshot.metadata.hasPendingWrites || snapshot.metadata.fromCache) return;
+      const data = snapshot.exists ? snapshot.data().lista : (key === K.col ? defaultColumns() : []);
+      if (!Array.isArray(data) || data.some(item => !item || typeof item !== 'object' || Array.isArray(item))) {
+        sessionReady = false; firstLoad = true; loaded.delete(key);
+        loading('Há dados em formato inválido. O carregamento foi interrompido para proteger os registros.', true);
+        return;
       }
-      
-      if(firstLoad) {
-          loaded++;
-          if(loaded === keys.length) {
-              updDL(); 
-              document.getElementById('loader').classList.add('off');
-              goTo(1); 
-              initDragToScroll(); 
-              toast("✅ Conectado com sucesso!");
-              firstLoad = false;
-          }
-      } else {
-          if (!docSnap.metadata.hasPendingWrites) atualizarTelaAtual();
-      }
-    }, (erro) => {
-      if(firstLoad) document.getElementById('loader').innerHTML = `<h2 style="color:var(--no)">⚠️ Erro de Permissão</h2>`;
+      MEM[key] = clone(data);
+      loaded.add(key);
+      if (loaded.size === Object.keys(K).length && firstLoad) {
+        firstLoad = false; sessionReady = true;
+        document.getElementById('app-container').style.display = 'block';
+        document.getElementById('loader').classList.add('off');
+        document.getElementById('vq').value = '1';
+        document.getElementById('eq').value = '0';
+        document.getElementById('em').value = '5';
+        document.getElementById('vd').value = hj();
+        document.getElementById('cd').value = hj();
+        goTo(1); initDragToScroll();
+      } else if (sessionReady && !saving) atualizarTelaAtual();
+    }, error => {
+      if (version !== sessionVersion) return;
+      sessionReady = false;
+      loading(error.code === 'permission-denied' ? 'Sem permissão para acessar os dados deste usuário.' : 'Não foi possível sincronizar os dados. Verifique a conexão e tente novamente.', true);
     });
+    subscriptions.push(unsubscribe);
   });
 }
+async function alterar(mutator, message = 'Salvo na nuvem.', after = () => {}) {
+  if (saving) {toast('Aguarde o salvamento em andamento.', true); return false;}
+  if (!sessionReady || !auth.currentUser) {toast('Aguarde a conexão com os dados antes de alterar registros.', true); return false;}
+  if (!navigator.onLine) {toast('Sem conexão. Seus campos foram preservados; tente novamente quando estiver online.', true); return false;}
+  const version = sessionVersion, userId = auth.currentUser.uid, token = {};
+  const state = clone(MEM), before = clone(MEM);
+  let committed = false;
+  saving = token; setSaving(true);
+  try {
+    mutator(state);
+    const changed = Object.values(K).filter(key => JSON.stringify(state[key]) !== JSON.stringify(before[key]));
+    if (!changed.length) return false;
+    // One commit acknowledges all parts of this action. Whole-list concurrency
+    // and the document size limit remain architectural limitations.
+    const batch = fbDB.batch();
+    changed.forEach(key => batch.set(fbDB.collection('banco_personalise').doc(key), {lista:state[key]}));
+    await batch.commit();
+    if (version !== sessionVersion || auth.currentUser?.uid !== userId) return false;
+    committed = true;
+    changed.forEach(key => {MEM[key] = state[key];});
+    after();
+    if (message) toast(message);
+    return true;
+  } catch (error) {
+    if (version === sessionVersion) {
+      if(committed){toast('Os dados foram salvos, mas a tela não pôde ser atualizada. Recarregue a página.',true);return true;}
+      toast(error.userMessage || 'Não foi possível salvar na nuvem. A alteração não foi confirmada e seus campos foram preservados.', true);
+      if (document.getElementById('mped').classList.contains('on') && actPed) abrModal(actPed);
+      atualizarTelaAtual();
+    }
+    return false;
+  } finally {
+    if (saving === token) {saving = null; setSaving(false);}
+  }
+}
+function getCols(){return DB.get(K.col).length ? DB.get(K.col) : defaultColumns();}
+function invalid(message) {const error = new Error(message); error.userMessage = message; throw error;}
+function required(value, name) {const text=String(value ?? '').trim(); if(!text) invalid(`Preencha ${name}.`); return text;}
+function quantity(value, name, minimum = 0) {
+  const number=Number(value);
+  if (String(value).trim()==='' || !Number.isSafeInteger(number) || number < minimum) invalid(`${name}: informe uma quantidade inteira a partir de ${minimum}.`);
+  return number;
+}
+function money(value, name, optional = false) {
+  const raw=String(value ?? '').trim();
+  if (optional && !raw) return 0;
+  const number=Number(raw);
+  if(!raw || !Number.isFinite(number) || number < 0 || !Number.isSafeInteger(Math.round(number * 100)) || Math.abs(number*100 - Math.round(number*100)) > 0.00001) invalid(`${name}: informe um valor válido, não negativo, com até duas casas decimais.`);
+  return Math.round(number*100)/100;
+}
+function validDate(value, optional = false) {
+  if (!value && optional) return null;
+  const date=new Date(value+'T12:00:00Z');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || !Number.isFinite(date.getTime()) || date.toISOString().slice(0,10)!==value) invalid('Informe uma data válida.');
+  return value;
+}
+function validEmail(value){const input=document.createElement('input');input.type='email';input.value=value;return input.checkValidity();}
+function choice(value, allowed) {if(!allowed.includes(value)) invalid('Selecione uma opção válida.'); return value;}
+function payment(value, receipt = false) {return choice(value, APP_CONFIG.pagamentos_vendas.filter(p => !receipt || p !== 'Fiado'));}
+function cents(value) {const n=Number(value);return Number.isFinite(n) ? Math.round((n + Number.EPSILON)*100) : 0;}
+function sumMoney(rows, key) {return rows.reduce((sum,row)=>sum+cents(row[key]),0)/100;}
+function subtractMoney(a,b){return (cents(a)-cents(b))/100;}
+function esc(value){return String(value ?? '').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function linkLegacyClient(state,client){
+ const link=record=>{if(!record.clienteId&&record.cliente===client.nome)record.clienteId=client.id;};
+ state[K.p].forEach(link);state[K.v].forEach(link);state[K.co].forEach(item=>{link(item);if(item.pedOriginal)link(item.pedOriginal);});
+}
+function clientFor(state, name, tel, selectedId) {
+  if (selectedId && selectedId !== '__new__') {
+    const selected=state[K.cl].find(c=>c.id===selectedId);
+    if (!selected || selected.nome!==name) invalid('Selecione novamente o cliente cadastrado.');
+    return selected;
+  }
+  const matches=state[K.cl].filter(c=>c.nome===name);
+  if (selectedId !== '__new__' && matches.length) {
+    const phone=tel.replace(/\D/g,'');
+    const exact=matches.filter(c=>!phone || String(c.tel||'').replace(/\D/g,'')===phone);
+    if (exact.length!==1) invalid('Há clientes com este nome. Selecione o cadastro correto ou escolha cadastrar novo cliente.');
+    return exact[0];
+  }
+  if(matches.length===1)linkLegacyClient(state,matches[0]);
+  const client={id:uid(),nome:name,tel,cidade:'',email:''};
+  state[K.cl].unshift(client); return client;
+}
+function escolherCliente(prefix, id) {
+  const client=DB.get(K.cl).find(c=>c.id===id);
+  if(!client) return;
+  document.getElementById(prefix==='if'?'ifc':prefix==='ep'?'epc':'vc').value=client.nome;
+  if(prefix!=='v') document.getElementById(prefix==='if'?'ift':'ept').value=client.tel||'';
+}
+async function fazerLogin() {
+  const email=gv('log-email').trim(), pass=gv('log-pass'), err=document.getElementById('login-error');
+  err.style.display='none'; document.getElementById('login-feedback').textContent='';
+  if(!email || !pass) {err.textContent='Preencha e-mail e senha.';err.style.display='block';return;}
+  if(!document.getElementById('log-email').checkValidity()){err.textContent='Informe um e-mail válido.';err.style.display='block';return;}
+  const button=document.getElementById('login-submit'); button.disabled=true;
+  try {await auth.signInWithEmailAndPassword(email,pass);document.getElementById('log-pass').value='';}
+  catch(error){err.textContent=error.code==='auth/network-request-failed'?'Não foi possível conectar. Verifique a internet.':error.code==='auth/too-many-requests'?'Muitas tentativas. Aguarde antes de tentar novamente.':'Não foi possível entrar. Confira o e-mail e a senha.';err.style.display='block';}
+  finally{button.disabled=false;}
+}
+async function recuperarSenha() {
+  const err=document.getElementById('login-error'),feedback=document.getElementById('login-feedback'),button=document.getElementById('reset-password');
+  err.style.display='none'; feedback.textContent='';
+  const email=gv('log-email').trim();
+  if(!email || !document.getElementById('log-email').checkValidity()){err.textContent='Informe seu e-mail válido para recuperar a senha.';err.style.display='block';return;}
+  button.disabled=true;
+  try {await auth.sendPasswordResetEmail(email);feedback.textContent='Se houver uma conta com esse e-mail, você receberá as instruções para redefinir a senha.';}
+  catch(error){if(error.code==='auth/user-not-found') feedback.textContent='Se houver uma conta com esse e-mail, você receberá as instruções para redefinir a senha.';else{err.textContent=error.code==='auth/too-many-requests'?'Muitas tentativas. Aguarde antes de tentar novamente.':'Não foi possível enviar a solicitação. Verifique a conexão e tente novamente.';err.style.display='block';}}
+  finally{button.disabled=false;}
+}
+async function fazerLogout() {
+  if(saving){toast('Aguarde a confirmação do salvamento antes de sair.',true);return;}
+  try{await auth.signOut();}catch{toast('Não foi possível sair. Tente novamente.',true);}
+}
+window.addEventListener('beforeunload',event=>{if(saving){event.preventDefault();event.returnValue='';}});
 
 function atualizarTelaAtual() {
   updDL(); 
@@ -151,10 +269,10 @@ function atualizarTelaAtual() {
 }
 
 // ── FUNÇÕES UTILITÁRIAS E MATEMÁTICA DE TAXAS ──
-const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2);
-const brl=v=>'R$ '+Number(v||0).toFixed(2).replace('.',',');
+const uid=()=>crypto.randomUUID();
+const brl=v=>'R$ '+(cents(v)/100).toFixed(2).replace('.',',');
 const hj=()=>{const d=new Date();d.setMinutes(d.getMinutes()-d.getTimezoneOffset());return d.toISOString().slice(0,10);};
-function fd(d){if(!d)return'–';const[y,m,day]=d.split('-');return`${day}/${m}/${y}`;}
+function fd(d){if(!/^\d{4}-\d{2}-\d{2}$/.test(String(d)))return'–';const[y,m,day]=d.split('-');return`${day}/${m}/${y}`;}
 const isL=d=>d&&d<hj();
 const isT=d=>d===hj();
 function gv(id){const e=document.getElementById(id);return e?e.value:''}
@@ -162,14 +280,14 @@ function sv(id,v){const e=document.getElementById(id);if(e)e.textContent=v;}
 function toast(m,e=false){const t=document.getElementById('toast');t.textContent=m;t.style.background=e?'var(--no)':'var(--pd)';t.classList.add('on');setTimeout(()=>t.classList.remove('on'),2700);}
 function CM(id){document.getElementById(id).classList.remove('on')}
 function OM(id){document.getElementById(id).classList.add('on')}
-function conf(m,cb){document.getElementById('cfm').textContent=m;OM('mcf');document.getElementById('cfo').onclick=()=>{cb();CM('mcf')}}
-
-function calcLiq(val, pgto) {
-    let v = Number(val);
-    if(pgto === 'Débito') return v * (1 - APP_CONFIG.taxas.debito / 100);       
-    if(pgto === 'Crédito') return v * (1 - APP_CONFIG.taxas.credito / 100);     
-    if(pgto === 'Compra Online') return v * (1 - APP_CONFIG.taxas.online / 100);
-    return v;
+function conf(m,cb){
+  document.getElementById('cfm').textContent=m;OM('mcf');
+  document.getElementById('cfo').onclick=async()=>{if(await cb() !== false)CM('mcf');};
+}
+function calcLiq(val,pgto){
+  const gross=cents(val), rate=pgto==='Débito'?APP_CONFIG.taxas.debito:pgto==='Crédito'?APP_CONFIG.taxas.credito:pgto==='Compra Online'?APP_CONFIG.taxas.online:0;
+  const scaled=BigInt(Math.abs(gross))*BigInt(10000-Math.round(rate*100));
+  return Math.sign(gross)*Number((scaled+5000n)/10000n)/100;
 }
 
 function brlLq(bruto, liq) {
@@ -180,7 +298,7 @@ function brlLq(bruto, liq) {
 function pagList(lista, idPag, funcMudar, arrKey) {
     let b = document.getElementById(idPag);
     if(!b) return lista;
-    if(lista.length <= ITEMS_PER_PAGE) { b.innerHTML = ''; return lista; }
+    if(lista.length <= ITEMS_PER_PAGE) { cp[arrKey]=1; b.innerHTML = ''; return lista; }
     let tot = Math.ceil(lista.length / ITEMS_PER_PAGE);
     if(cp[arrKey] > tot) cp[arrKey] = tot;
     if(cp[arrKey] < 1) cp[arrKey] = 1;
@@ -198,13 +316,16 @@ function mudarPagCl(dir){ cp.cl+=dir; renderCl(); }
 function mudarPagR(dir) { cp.r+=dir; gerarR(false); }
 
 function updDL(){
-    const cls=DB.get(K.cl) || [];
-    ['vcl','ifcl'].forEach(id=>{
-        const d=document.getElementById(id);
-        if(d) d.innerHTML=cls.map(c=>`<option value="${c.nome}">`).join('');
-    });
+  const clients=DB.get(K.cl);
+  ['vcl','ifcl'].forEach(id=>{const list=document.getElementById(id);list.replaceChildren(...clients.map(c=>new Option(c.nome,c.nome)));});
+  ['if','v','ep'].forEach(prefix=>{
+    const select=document.getElementById(prefix+'cliente-id');
+    const selected=select.value;
+    select.replaceChildren(new Option('Selecione um cadastro (opcional)',''),new Option('Cadastrar novo cliente','__new__'),...clients.map(c=>new Option(`${esc(c.nome)}${c.tel?' · '+c.tel:''}${c.email?' · '+c.email:''} · ${String(c.id).slice(-6)}`,c.id)));
+    select.value=selected;
+  });
 }
-function copiarTexto(e,t){ e.stopPropagation(); navigator.clipboard.writeText(t).then(()=>toast('📋 Copiado!')) }
+async function copiarTexto(e,t){e.stopPropagation();try{await navigator.clipboard.writeText(t);toast('Copiado!');}catch{toast('Não foi possível copiar. Selecione o número manualmente.',true);}}
 function initDragToScroll() {
   const slider = document.getElementById('kb'); let isDown=false,startX,scrollLeft;
   if(!slider) return;
@@ -216,12 +337,12 @@ document.querySelectorAll('.mo').forEach(m => { m.addEventListener('click', (e) 
 if(document.getElementById('vd')) document.getElementById('vd').value = hj();
 if(document.getElementById('cd')) document.getElementById('cd').value = hj();
 
-function autoFillTel() {
-    const nomeDigitado = gv('ifc').trim().toLowerCase();
-    if (!nomeDigitado) { document.getElementById('ift').value = ''; return; } 
-    const cls = DB.get(K.cl) || [];
-    const ex = cls.find(c => c.nome.toLowerCase() === nomeDigitado);
-    if (ex && ex.tel) { document.getElementById('ift').value = ex.tel; }
+function autoFillTel(){
+  const name=gv('ifc').trim(),select=document.getElementById('ifcliente-id');
+  if(select.value==='__new__')return;
+  const matches=DB.get(K.cl).filter(c=>c.nome===name);
+  select.value=matches.length===1?matches[0].id:'';
+  document.getElementById('ift').value=matches.length===1?(matches[0].tel||''):'';
 }
 
 // ── 4. NAVEGAÇÃO E DASHBOARD ──
@@ -240,30 +361,30 @@ function buildDash(){
   const vs=DB.get(K.v)||[],cs=DB.get(K.c)||[],ps=DB.get(K.p)||[],es=DB.get(K.e)||[];
   
   const vH=vs.filter(v=>v.data===d),cH=cs.filter(c=>c.data===d);
-  const ent=vH.reduce((a,v)=>a+Number(v.total||0),0),sai=cH.reduce((a,c)=>a+Number(c.valor||0),0),sal=ent-sai;
+  const ent=vH.reduce((a,item)=>a+cents(item.total),0)/100,sai=cH.reduce((a,item)=>a+cents(item.valor),0)/100,sal=ent-sai;
   
   // DADOS TOTAIS (HISTÓRICO COMPLETO PARA O SALDO GERAL)
-  const allVendas = vs.filter(v => v.categoria !== 'Ajuste de caixa').reduce((a,b)=>a+Number(b.total),0);
-  const allAjustesPos = vs.filter(v => v.categoria === 'Ajuste de caixa').reduce((a,b)=>a+Number(b.total),0);
-  const allCustos = cs.filter(c=>!['Retirada Pessoal','Pró-labore','Ajuste de caixa'].includes(c.categoria)).reduce((a,b)=>a+Number(b.valor),0);
-  const allRetiradas = cs.filter(c=>['Retirada Pessoal','Pró-labore'].includes(c.categoria)).reduce((a,b)=>a+Number(b.valor),0);
-  const allAjustesNeg = cs.filter(c => c.categoria === 'Ajuste de caixa').reduce((a,b)=>a+Number(b.valor),0);
+  const allVendas = vs.filter(v => v.categoria !== 'Ajuste de caixa').reduce((a,b)=>a+cents(b.total),0)/100;
+  const allAjustesPos = vs.filter(v => v.categoria === 'Ajuste de caixa').reduce((a,b)=>a+cents(b.total),0)/100;
+  const allCustos = cs.filter(c=>!['Retirada Pessoal','Pró-labore','Ajuste de caixa'].includes(c.categoria)).reduce((a,b)=>a+cents(b.valor),0)/100;
+  const allRetiradas = cs.filter(c=>['Retirada Pessoal','Pró-labore'].includes(c.categoria)).reduce((a,b)=>a+cents(b.valor),0)/100;
+  const allAjustesNeg = cs.filter(c => c.categoria === 'Ajuste de caixa').reduce((a,b)=>a+cents(b.valor),0)/100;
 
   const saldoGeral = (allVendas + allAjustesPos) - (allCustos + allRetiradas + allAjustesNeg);
 
   // LÓGICA DA GAVETA (TODO O DINHEIRO FÍSICO DO NEGÓCIO + AJUSTES EM DINHEIRO)
-  const entDinheiro = vs.filter(v => v.pgto === 'Dinheiro').reduce((a,b) => a + Number(b.total), 0);
-  const saiDinheiro = cs.filter(c => c.pgto === 'Dinheiro').reduce((a,b) => a + Number(b.valor), 0);
+  const entDinheiro = vs.filter(v => v.pgto === 'Dinheiro').reduce((a,b)=>a+cents(b.total),0)/100;
+  const saiDinheiro = cs.filter(c => c.pgto === 'Dinheiro').reduce((a,b)=>a+cents(b.valor),0)/100;
   const saldoDinheiro = entDinheiro - saiDinheiro;
 
   // DADOS DO MÊS ATUAL
-  const vM=vs.filter(v=>v.data.startsWith(mes)), cM=cs.filter(c=>c.data.startsWith(mes));
+  const vM=vs.filter(v=>String(v.data||'').startsWith(mes)), cM=cs.filter(c=>String(c.data||'').startsWith(mes));
   
-  const fatM = vM.filter(v => v.categoria !== 'Ajuste de caixa').reduce((a,b)=>a+Number(b.total),0);
-  const custosM = cM.filter(c=>!['Retirada Pessoal','Pró-labore','Ajuste de caixa'].includes(c.categoria)).reduce((a,b)=>a+Number(b.valor),0);
-  const retiradasM = cM.filter(c=>['Retirada Pessoal','Pró-labore'].includes(c.categoria)).reduce((a,b)=>a+Number(b.valor),0);
-  const ajustesPosM = vM.filter(v => v.categoria === 'Ajuste de caixa').reduce((a,b)=>a+Number(b.total),0);
-  const ajustesNegM = cM.filter(c => c.categoria === 'Ajuste de caixa').reduce((a,b)=>a+Number(b.valor),0);
+  const fatM = vM.filter(v => v.categoria !== 'Ajuste de caixa').reduce((a,b)=>a+cents(b.total),0)/100;
+  const custosM = cM.filter(c=>!['Retirada Pessoal','Pró-labore','Ajuste de caixa'].includes(c.categoria)).reduce((a,b)=>a+cents(b.valor),0)/100;
+  const retiradasM = cM.filter(c=>['Retirada Pessoal','Pró-labore'].includes(c.categoria)).reduce((a,b)=>a+cents(b.valor),0)/100;
+  const ajustesPosM = vM.filter(v => v.categoria === 'Ajuste de caixa').reduce((a,b)=>a+cents(b.total),0)/100;
+  const ajustesNegM = cM.filter(c => c.categoria === 'Ajuste de caixa').reduce((a,b)=>a+cents(b.valor),0)/100;
 
   const lucroLiqM = fatM - custosM;
   const resultadoMes = (fatM + ajustesPosM) - (custosM + retiradasM + ajustesNegM);
@@ -294,10 +415,10 @@ function buildDash(){
   if(CHS['ch1'])CHS['ch1'].destroy();
   const elCh1 = document.getElementById('ch1');
   if(elCh1) {
-      CHS['ch1']=new Chart(elCh1.getContext('2d'),{type:'bar',data:{labels:lbM,datasets:[{label:'Vendas Líquidas',data:ms.map(m=>(DB.get(K.v)||[]).filter(v=>v.data.startsWith(m) && v.categoria !== 'Ajuste de caixa').reduce((a,v)=>a+Number(v.total||0),0)),backgroundColor:APP_CONFIG.tema.p,borderRadius:4},{label:'Custos do negócio',data:ms.map(m=>(DB.get(K.c)||[]).filter(c=>c.data.startsWith(m)&&!['Retirada Pessoal','Pró-labore','Ajuste de caixa'].includes(c.categoria)).reduce((a,c)=>a+Number(c.valor||0),0)),backgroundColor:APP_CONFIG.tema.chart[1],borderRadius:4}]},options:{responsive:true,maintainAspectRatio:false}});
+      CHS['ch1']=new Chart(elCh1.getContext('2d'),{type:'bar',data:{labels:lbM,datasets:[{label:'Vendas Líquidas',data:ms.map(m=>(DB.get(K.v)||[]).filter(v=>String(v.data||'').startsWith(m) && v.categoria !== 'Ajuste de caixa').reduce((a,item)=>a+cents(item.total),0)/100),backgroundColor:APP_CONFIG.tema.p,borderRadius:4},{label:'Custos do negócio',data:ms.map(m=>(DB.get(K.c)||[]).filter(c=>String(c.data||'').startsWith(m)&&!['Retirada Pessoal','Pró-labore','Ajuste de caixa'].includes(c.categoria)).reduce((a,item)=>a+cents(item.valor),0)/100),backgroundColor:APP_CONFIG.tema.chart[1],borderRadius:4}]},options:{responsive:true,maintainAspectRatio:false}});
   }
   
-  const cats={};vs.filter(v=>v.categoria!=='Ajuste de caixa').forEach(v=>{const c=v.categoria||'Outros';cats[c]=(cats[c]||0)+Number(v.total||0);});
+  const cats={};vs.filter(v=>v.categoria!=='Ajuste de caixa').forEach(v=>{const c=v.categoria||'Outros';cats[c]=((cents(cats[c])+cents(v.total))/100);});
   if(CHS['ch2'])CHS['ch2'].destroy();
   const elCh2 = document.getElementById('ch2');
   if(elCh2) {
@@ -325,10 +446,11 @@ function buildAlerts(){
   if(pp.length)add('in','💳',`${pp.length} PENDENTES PGTO`,'pagamento');
 }
 
+function destroyBoardSortables(){const board=document.getElementById('kb');board.sortableInstance?.destroy();board.sortableInstance=null;(board.cardSortables||[]).forEach(sortable=>sortable.destroy());board.cardSortables=[];}
 function renderKB(){
   const board=document.getElementById('kb'); 
   if(!board) return;
-  const cols=getCols(); const ps=DB.get(K.p)||[]; board.innerHTML='';
+  const cols=getCols(); const ps=DB.get(K.p)||[]; destroyBoardSortables();board.innerHTML='';
   const banner=document.getElementById('kb-filter-banner');
   kbQ=gv('kb-q').toLowerCase().trim(); 
 
@@ -346,31 +468,31 @@ function renderKB(){
     if(activeFilter==='atraso') cards=cards.filter(p=>!p.entregue&&isL(p.entrega));
     if(activeFilter==='pagamento') cards=cards.filter(p=>!p.pago&&Number(p.valor||0)>0);
     
-    if(kbQ) cards=cards.filter(p=>p.cliente.toLowerCase().includes(kbQ)||p.desc.toLowerCase().includes(kbQ));
+    if(kbQ) cards=cards.filter(p=>String(p.cliente||'').toLowerCase().includes(kbQ)||String(p.desc||'').toLowerCase().includes(kbQ));
 
-    const tot=cards.reduce((a,p)=>a+Number(p.valor||0),0);
+    const tot=cards.reduce((a,p)=>a+cents(p.valor),0)/100;
     const ce=document.createElement('div'); ce.className='kc'; ce.dataset.colId=col.id;
-    ce.innerHTML=`<div class="kch"><span class="cn${!col.fixa?' ed':''}" ${!col.fixa?`ondblclick="abrRnc('${col.id}')"`:''}>${col.nome}</span><div class="cm2"><span class="cb">${cards.length}</span>${tot>0?`<span class="ct">${brl(tot)}</span>`:''} <button class="bc" style="${col.fixa?'display:none':''}" onclick="delCol('${col.id}')">✕</button></div></div>`;
+    ce.innerHTML=`<div class="kch"><span class="cn${!col.fixa?' ed':''}" ${!col.fixa?`data-rename-col="${esc(col.id)}"`:''}>${esc(col.nome)}</span><div class="cm2"><span class="cb">${cards.length}</span>${tot>0?`<span class="ct">${brl(tot)}</span>`:''} <button class="bc" style="${col.fixa?'display:none':''}" data-action="delete-column" data-id="${esc(col.id)}">✕</button></div></div>`;
     const body=document.createElement('div'); body.className='kcb'; body.dataset.colId=col.id;
     
     cards.forEach(p=>{
       const el=document.createElement('div'); el.className=`kd ${p.entregue?'eg':''} ${p.pago?'k-pago':''}`; el.dataset.id=p.id;
-      const rest=Number(p.valor||0)-Number(p.sinal||0);
-      const telH=p.tel?`<div class="k-tel" onmousedown="event.stopPropagation()" onclick="copiarTexto(event,'${p.tel}')">📱 ${p.tel}</div>`:'';
-      el.innerHTML=`<div class="kt"><div style="display:flex;flex-direction:column;"><span class="kn">${p.cliente}</span>${telH}</div><span class="kv">${brl(p.valor)}</span></div><div class="kdc">${p.desc}</div><div class="kft"><span>${p.entrega?'📅 '+fd(p.entrega):''}</span><div>${p.pago?'<span class="tg2 t-pago">✅ Pago</span>':(rest>0?`<span class="tg2 pn">💳 ${brl(rest)}</span>`:'')}</div></div>`;
-      el.onclick=()=>abrModal(p.id); body.appendChild(el);
+      const rest=subtractMoney(p.valor,p.sinal);
+      const telH=p.tel?`<div class="k-tel" onmousedown="event.stopPropagation()" data-action="copy-phone" data-phone="${esc(p.tel)}">📱 ${esc(p.tel)}</div>`:'';
+      el.innerHTML=`<div class="kt"><div style="display:flex;flex-direction:column;"><span class="kn">${esc(p.cliente)}</span>${telH}</div><span class="kv">${brl(p.valor)}</span></div><div class="kdc">${esc(p.desc)}</div><div class="kft"><span>${p.entrega?'📅 '+fd(p.entrega):''}</span><div>${p.pago?'<span class="tg2 t-pago">✅ Pago</span>':(rest>0?`<span class="tg2 pn">💳 ${brl(rest)}</span>`:'')}</div></div>`;
+      el.onclick=event=>{if(!event.target.closest('[data-action],button,a'))abrModal(p.id);}; body.appendChild(el);
     });
     ce.appendChild(body); board.appendChild(ce);
   });
   const btn=document.createElement('button');btn.className='bnc';btn.innerHTML='+';btn.onclick=()=>{document.getElementById('ncn').value='';OM('mnc');};board.appendChild(btn);
 
-  new Sortable(board,{animation:150,draggable:'.kc',handle:'.kch',filter:'.bc',ghostClass:'sortable-ghost',onEnd:evt=>{
-    const ids=Array.from(board.querySelectorAll('.kc')).map(el=>el.dataset.colId);
-    const old=getCols(); const nw=ids.map(id=>old.find(c=>c.id===id)).filter(Boolean); DB.set(K.col,nw);
+  board.sortableInstance=new Sortable(board,{animation:150,draggable:'.kc',handle:'.kch',filter:'.bc',onEnd:async()=>{
+    const ids=[...board.querySelectorAll('.kc')].map(el=>el.dataset.colId);
+    await alterar(state=>{const cols=state[K.col].length?state[K.col]:defaultColumns();state[K.col]=ids.map(id=>cols.find(c=>c.id===id)).filter(Boolean);},'Ordem das colunas salva.');renderKB();
   }});
-  document.querySelectorAll('.kcb').forEach(el=>new Sortable(el,{group:'kanban',animation:150,ghostClass:'sortable-ghost',onEnd:evt=>{
-    const pId=evt.item.dataset.id; const toId=evt.to.dataset.colId; const ps=DB.get(K.p); const i=ps.findIndex(p=>p.id===pId);
-    if(i!==-1&&ps[i].colId!==toId){ps[i].colId=toId; DB.set(K.p,ps)}
+  board.cardSortables=[...document.querySelectorAll('.kcb')].map(el=>new Sortable(el,{group:'kanban',animation:150,onEnd:async event=>{
+    const id=event.item.dataset.id,column=event.to.dataset.colId;
+    await alterar(state=>{const order=state[K.p].find(p=>p.id===id);if(!order)invalid('Pedido não encontrado.');order.colId=column;},'Pedido movido.');renderKB();
   }}));
 }
 
@@ -382,100 +504,63 @@ function stab(show,hide,el){
 }
 
 function addCard(){
-  let cli=gv('ifc').trim(), desc=gv('ifd').trim(), tel=gv('ift').trim();
-  let valTotal = Number(gv('ifv')||0), sinalVal = Number(gv('ifs')||0);
-  let sinalPgto = gv('ifspg');
-  if(!cli||!desc) return toast("Preencha cliente e descrição!", true);
-  
-  const cls=DB.get(K.cl)||[]; let cleanTel=tel.replace(/\D/g,'');
-  let ex=cleanTel?cls.find(c=>c.tel&&c.tel.replace(/\D/g,'')===cleanTel):cls.find(c=>c.nome.toLowerCase()===cli.toLowerCase());
-  if(ex) cli=ex.nome;
-  else { cls.unshift({id:uid(),nome:cli,tel:tel,cidade:''}); DB.set(K.cl,cls); updDL(); }
-  
-  let sVId = null;
-  if(sinalVal > 0) {
-      sVId = 'v_' + uid();
-      let liq = calcLiq(sinalVal, sinalPgto);
-      const vs = DB.get(K.v) || [];
-      vs.unshift({id: sVId, cliente: cli, produto: 'Sinal - ' + desc, categoria: 'Vendas', qtd: 1, totalBruto: sinalVal, total: liq, pgto: sinalPgto, data: hj()});
-      DB.set(K.v, vs);
-  }
-
-  const ps=DB.get(K.p)||[]; 
-  ps.unshift({
-      id:uid(), colId:getCols()[0].id, cliente:cli, desc:desc, valor:valTotal, sinal:sinalVal, tel:tel, 
-      entrega:gv('ife') || null, data:hj(), pago:false, entregue:false, sinalVId: sVId || null, restVId: null
-  });
-  DB.set(K.p,ps);
-  
-  document.getElementById('ifc').value='';document.getElementById('ifd').value='';document.getElementById('ifv').value='';document.getElementById('ifs').value='';document.getElementById('ift').value='';document.getElementById('ife').value='';
-  CM('mnp'); atualizarKanbanEAlertas(); toast("Pedido Adicionado!");
+ return alterar(state=>{
+  const name=required(gv('ifc'),'o cliente'), desc=required(gv('ifd'),'a descrição'),tel=gv('ift').trim();
+  const total=money(gv('ifv'),'Valor total',true),deposit=money(gv('ifs'),'Sinal',true);
+  if(deposit>total)invalid('O sinal não pode ser maior que o valor total.');
+  const method=payment(gv('ifspg'),true), delivery=validDate(gv('ife'),true);
+  const client=clientFor(state,name,tel,gv('ifcliente-id'));
+  const saleId=deposit>0?'v_'+uid():null;
+  if(saleId)state[K.v].unshift({id:saleId,cliente:client.nome,clienteId:client.id,produto:'Sinal - '+desc,categoria:'Vendas',qtd:1,totalBruto:deposit,total:calcLiq(deposit,method),pgto:method,data:hj()});
+  state[K.p].unshift({id:uid(),colId:(state[K.col][0]||defaultColumns()[0]).id,cliente:client.nome,clienteId:client.id,desc,valor:total,sinal:deposit,tel,entrega:delivery,data:hj(),pago:false,entregue:false,sinalVId:saleId,restVId:null});
+ },'Pedido adicionado!',()=>{
+  ['ifc','ifd','ifv','ifs','ift','ife','ifcliente-id'].forEach(id=>document.getElementById(id).value='');
+  CM('mnp');updDL();atualizarKanbanEAlertas();
+ });
 }
 
 let actPed=null,edColId=null;
 function abrModal(id){
   actPed=id; const p=DB.get(K.p).find(x=>x.id===id); if(!p) return;
-  let num=p.tel?p.tel.replace(/\D/g,''):'';
-  let wa=num.length>=10?`<a href="https://wa.me/55${num}" target="_blank" style="background:#25D366;color:#fff;padding:3px 10px;border-radius:10px;text-decoration:none;font-size:0.7rem;font-weight:bold;margin-left:10px;">💬 WhatsApp</a>`:'';
-  document.getElementById('mpif').innerHTML=`<div style="font-weight:bold;font-size:1.05rem;color:var(--pd);margin-bottom:6px;display:flex;align-items:center;">${p.cliente} ${wa}</div><strong>Descrição:</strong> ${p.desc}`;
-  sv('mptot',brl(p.valor)); sv('mpsin',brl(p.sinal)); sv('mprest',brl(Number(p.valor)-Number(p.sinal)));
+  let num=p.tel?String(p.tel).replace(/\D/g,''):'';
+  let wa=num.length>=10?`<a href="https://wa.me/55${num}" target="_blank" rel="noopener noreferrer" style="background:#25D366;color:#fff;padding:3px 10px;border-radius:10px;text-decoration:none;font-size:0.7rem;font-weight:bold;margin-left:10px;">💬 WhatsApp</a>`:'';
+  document.getElementById('mpif').innerHTML=`<div style="font-weight:bold;font-size:1.05rem;color:var(--pd);margin-bottom:6px;display:flex;align-items:center;">${esc(p.cliente)} ${wa}</div><strong>Descrição:</strong> ${esc(p.desc)}`;
+  sv('mptot',brl(p.valor)); sv('mpsin',brl(p.sinal)); sv('mprest',brl(subtractMoney(p.valor,p.sinal)));
   
   document.getElementById('mppg').checked=!!p.pago; document.getElementById('mpeg').checked=!!p.entregue;
   OM('mped');
 }
 
 function togF(f){
-  const ps=DB.get(K.p); const i=ps.findIndex(p=>p.id===actPed); if(i===-1)return;
-  const isC=document.getElementById(f==='pago'?'mppg':'mpeg').checked;
-  let p = ps[i];
-  
-  if(f === 'pago') {
-      if(isC && !p.pago) {
-          let restB = Number(p.valor||0) - Number(p.sinal||0);
-          if(restB > 0) {
-              let rId = 'v_' + uid();
-              let pgtoMetodo = gv('mppg_met');
-              let restL = calcLiq(restB, pgtoMetodo);
-              const vs = DB.get(K.v) || [];
-              vs.unshift({id: rId, cliente: p.cliente, produto: 'Restante - ' + p.desc, categoria: 'Vendas', qtd: 1, totalBruto: restB, total: restL, pgto: pgtoMetodo, data: hj()});
-              DB.set(K.v, vs);
-              p.restVId = rId;
-          }
-      } else if (!isC && p.pago) {
-          if(p.restVId) {
-              let vs = DB.get(K.v) || [];
-              vs = vs.filter(v => v.id !== p.restVId);
-              DB.set(K.v, vs);
-              p.restVId = null;
-          }
-      }
+ return alterar(state=>{
+  if(!['pago','entregue'].includes(f))invalid('Status inválido.');
+  const p=state[K.p].find(p=>p.id===actPed);if(!p)invalid('Pedido não encontrado.');
+  const checked=document.getElementById(f==='pago'?'mppg':'mpeg').checked;
+  if(f==='pago'){
+   if(checked&&!p.pago){
+    const rest=subtractMoney(p.valor,p.sinal);
+    if(rest>0){const method=payment(gv('mppg_met'),true);p.restVId='v_'+uid();state[K.v].unshift({id:p.restVId,cliente:p.cliente,clienteId:p.clienteId||null,produto:'Restante - '+p.desc,categoria:'Vendas',qtd:1,totalBruto:rest,total:calcLiq(rest,method),pgto:method,data:hj()});}
+   }else if(!checked&&p.pago&&p.restVId){state[K.v]=state[K.v].filter(v=>v.id!==p.restVId);p.restVId=null;}
   }
-
-  p[f]=isC; DB.set(K.p,ps); abrModal(actPed); atualizarKanbanEAlertas();
-  if(f==='pago'&&activeFilter==='pagamento'&&isC) toast('Pago! (Ocultado dos devedores)');
-  else if(f==='entregue'&&(activeFilter==='hoje'||activeFilter==='atraso')&&isC) toast('Entregue! (Ocultado das pendências)');
-  else toast('Status atualizado!');
+  p[f]=checked;
+ },'Status atualizado!',()=>{abrModal(actPed);atualizarKanbanEAlertas();});
 }
 
 function delPA(){
-    CM('mped');
-    conf('Excluir pedido definitivamente?',()=>{
-        const ps=DB.get(K.p); const p=ps.find(x=>x.id===actPed);
-        if(p) {
-            let vs = DB.get(K.v) || [];
-            if(p.sinalVId) vs = vs.filter(v => v.id !== p.sinalVId);
-            if(p.restVId) vs = vs.filter(v => v.id !== p.restVId);
-            DB.set(K.v, vs);
-        }
-        DB.set(K.p,DB.get(K.p).filter(p=>p.id!==actPed));
-        atualizarKanbanEAlertas(); toast('Excluído!');
-    });
+ const id=actPed;
+ conf('Excluir pedido definitivamente?',()=>alterar(state=>{
+  const p=state[K.p].find(p=>p.id===id);if(!p)invalid('Pedido não encontrado.');
+  state[K.v]=state[K.v].filter(v=>v.id!==p.sinalVId&&v.id!==p.restVId);
+  state[K.p]=state[K.p].filter(p=>p.id!==id);
+ },'Pedido excluído.',()=>{CM('mped');atualizarKanbanEAlertas();}));
 }
 
 function editPA(){
+  updDL();
   const p=DB.get(K.p).find(x=>x.id===actPed);if(!p)return;
   document.getElementById('epc').value=p.cliente;document.getElementById('ept').value=p.tel||'';document.getElementById('epe').value=p.entrega||'';document.getElementById('epv').value=p.valor;document.getElementById('eps').value=p.sinal||0;document.getElementById('epd').value=p.desc;
   
+  document.getElementById('epcliente-id').value=p.clienteId||'';
   let sMet = 'PIX';
   if(p.sinalVId) {
       let v = (DB.get(K.v)||[]).find(x=>x.id===p.sinalVId);
@@ -487,82 +572,60 @@ function editPA(){
 }
 
 function salvarEd(){
-  const cli=gv('epc').trim(),desc=gv('epd').trim();if(!cli||!desc)return toast('Preencha os campos!',true);
-  const ps=DB.get(K.p);const i=ps.findIndex(p=>p.id===actPed);if(i===-1)return;
-  let p = ps[i];
-  let novoSinalB = Number(gv('eps')||0);
-  let novoValor = Number(gv('epv')||0);
-  let sinalPgto = gv('epspg');
-  let novoSinalL = calcLiq(novoSinalB, sinalPgto);
-  
-  let vs = DB.get(K.v) || [];
-  if(p.sinalVId) {
-      let vi = vs.findIndex(v => v.id === p.sinalVId);
-      if(vi !== -1) { vs[vi].totalBruto = novoSinalB; vs[vi].total = novoSinalL; vs[vi].cliente = cli; vs[vi].produto = 'Sinal - ' + desc; vs[vi].pgto = sinalPgto; }
-  } else if (novoSinalB > 0) {
-      p.sinalVId = 'v_' + uid();
-      vs.unshift({id: p.sinalVId, cliente: cli, produto: 'Sinal - ' + desc, categoria: 'Vendas', qtd: 1, totalBruto: novoSinalB, total: novoSinalL, pgto: sinalPgto, data: hj()});
-  }
-  
-  if(p.restVId) {
-      let vi = vs.findIndex(v => v.id === p.restVId);
-      if(vi !== -1) { 
-          let calcRestB = novoValor - novoSinalB;
-          vs[vi].totalBruto = calcRestB; 
-          vs[vi].total = calcLiq(calcRestB, vs[vi].pgto); 
-          vs[vi].cliente = cli; vs[vi].produto = 'Restante - ' + desc; 
-      }
-  }
-  DB.set(K.v, vs);
-
-  ps[i]={...p,cliente:cli,tel:gv('ept').trim(),entrega:gv('epe')||null,valor:novoValor,sinal:novoSinalB,desc};
-  DB.set(K.p,ps);CM('mep');atualizarKanbanEAlertas();toast('Editado!');
+ return alterar(state=>{
+  const p=state[K.p].find(p=>p.id===actPed);if(!p)invalid('Pedido não encontrado.');
+  const name=required(gv('epc'),'o cliente'),desc=required(gv('epd'),'a descrição'),tel=gv('ept').trim();
+  const deposit=money(gv('eps'),'Sinal',true),total=money(gv('epv'),'Valor total',true);
+  if(deposit>total)invalid('O sinal não pode ser maior que o valor total.');
+  const method=payment(gv('epspg'),true),delivery=validDate(gv('epe'),true),client=clientFor(state,name,tel,gv('epcliente-id'));
+  if(p.sinalVId){const v=state[K.v].find(v=>v.id===p.sinalVId);if(!v)invalid('O recebimento vinculado não existe. Atualize o pedido antes de editar.');Object.assign(v,{totalBruto:deposit,total:calcLiq(deposit,method),cliente:client.nome,clienteId:client.id,produto:'Sinal - '+desc,pgto:method});}
+  else if(deposit>0){p.sinalVId='v_'+uid();state[K.v].unshift({id:p.sinalVId,cliente:client.nome,clienteId:client.id,produto:'Sinal - '+desc,categoria:'Vendas',qtd:1,totalBruto:deposit,total:calcLiq(deposit,method),pgto:method,data:hj()});}
+  if(p.restVId){const v=state[K.v].find(v=>v.id===p.restVId);if(!v)invalid('O recebimento vinculado não existe. Atualize o pedido antes de editar.');const rest=subtractMoney(total,deposit);Object.assign(v,{totalBruto:rest,total:calcLiq(rest,v.pgto),cliente:client.nome,clienteId:client.id,produto:'Restante - '+desc});}
+  Object.assign(p,{cliente:client.nome,clienteId:client.id,tel,entrega:delivery,valor:total,sinal:deposit,desc});
+ },'Pedido editado!',()=>{CM('mep');updDL();atualizarKanbanEAlertas();});
 }
 
-function criarCol(){const n=gv('ncn').trim();if(n){const c=getCols();c.push({id:'c'+uid(),nome:n,fixa:false});DB.set(K.col,c);CM('mnc');atualizarKanbanEAlertas();}}
+function criarCol(){return alterar(state=>{
+ const name=required(gv('ncn'),'o nome da coluna');if(name.length>26)invalid('O nome da coluna deve ter até 26 caracteres.');
+ if(!state[K.col].length)state[K.col]=defaultColumns();state[K.col].push({id:'c'+uid(),nome:name,fixa:false});
+},'Coluna criada.',()=>{CM('mnc');atualizarKanbanEAlertas();});}
 function abrRnc(id){edColId=id;const col=getCols().find(c=>c.id===id);document.getElementById('rcn').value=col?col.nome:'';OM('mrc');}
-function renCol(){const n=gv('rcn').trim();if(n&&edColId){const c=getCols();const i=c.findIndex(x=>x.id===edColId);if(i!==-1)c[i].nome=n;DB.set(K.col,c);CM('mrc');atualizarKanbanEAlertas();}}
-function delCol(id){if(DB.get(K.p).some(p=>(p.colId||getCols()[0].id)===id))return toast('Mova os pedidos antes!',true);conf('Excluir coluna?',()=>{DB.set(K.col,getCols().filter(c=>c.id!==id));atualizarKanbanEAlertas();});}
+function renCol(){return alterar(state=>{
+ const name=required(gv('rcn'),'o nome da coluna');if(name.length>26)invalid('O nome da coluna deve ter até 26 caracteres.');
+ const col=state[K.col].find(c=>c.id===edColId);if(!col)invalid('Coluna não encontrada.');col.nome=name;
+},'Coluna atualizada.',()=>{CM('mrc');atualizarKanbanEAlertas();});}
+function delCol(id){conf('Excluir coluna?',()=>alterar(state=>{
+ const col=state[K.col].find(c=>c.id===id);if(!col||col.fixa)invalid('Esta coluna não pode ser excluída.');
+ if(state[K.p].some(p=>(p.colId||getCols()[0].id)===id))invalid('Mova os pedidos antes de excluir a coluna.');
+ state[K.col]=state[K.col].filter(c=>c.id!==id);
+},'Coluna excluída.',atualizarKanbanEAlertas));}
 
 function abrirLV(){
   const p=DB.get(K.p).find(x=>x.id===actPed); if(!p) return;
   const sel=document.getElementById('lvest');
-  sel.innerHTML=`<option value="">— Não abater —</option>`+(DB.get(K.e)||[]).map(e=>`<option value="${e.id}">${e.nome}</option>`).join('');
+  sel.innerHTML=`<option value="">— Não abater —</option>`+(DB.get(K.e)||[]).map(e=>`<option value="${esc(e.id)}">${esc(e.nome)}</option>`).join('');
   document.getElementById('lvqw').style.display='none';
   document.getElementById('lvq').value='1';
   CM('mped'); OM('mlv');
 }
 
 function confLV(){
-  const ps=DB.get(K.p); const i=ps.findIndex(p=>p.id===actPed); if(i===-1)return; const ped=ps[i];
-  
-  if(!ped.pago) {
-     let restB = Number(ped.valor||0) - Number(ped.sinal||0);
-     if(restB > 0) {
-         ped.restVId = 'v_' + uid();
-         let restL = restB; 
-         const vs = DB.get(K.v) || [];
-         vs.unshift({id: ped.restVId, cliente: ped.cliente, produto: 'Restante - ' + ped.desc, categoria: 'Vendas', qtd: 1, totalBruto: restB, total: restL, pgto: 'Dinheiro', data: hj()});
-         DB.set(K.v, vs);
-     }
-     ped.pago = true;
+ return alterar(state=>{
+  const index=state[K.p].findIndex(p=>p.id===actPed);if(index===-1)invalid('Pedido não encontrado.');const ped=state[K.p][index];
+  const stockId=gv('lvest');let deducted=0,stockBefore=null;
+  if(stockId){
+   deducted=quantity(gv('lvq'),'Quantidade a abater',1);
+   const stock=state[K.e].find(e=>e.id===stockId);if(!stock)invalid('Item de estoque não encontrado.');
+   stockBefore=quantity(stock.qtd,'Estoque atual');
+   if(deducted>stockBefore)invalid('Estoque insuficiente. A quantidade solicitada não foi abatida.');
+   stock.qtd=stockBefore-deducted;
   }
-
-  const estId=gv('lvest'); let qtdAbatida = 0;
-  if(estId){
-      qtdAbatida = Number(gv('lvq')||1);
-      const es=DB.get(K.e);const ei=es.findIndex(e=>e.id===estId);
-      if(ei!==-1){es[ei].qtd=Math.max(0,es[ei].qtd-qtdAbatida);DB.set(K.e,es);}
-  }
-  
-  const co=DB.get(K.co)||[]; 
-  co.unshift({
-      id:uid(),cliente:ped.cliente,desc:ped.desc,valor:ped.valor,dataConc:hj(), 
-      sinalVId: ped.sinalVId || null, restVId: ped.restVId || null, 
-      pedOriginal: ped, estId: estId || null, qtdEst: qtdAbatida || 0
-  });
-  
-  DB.set(K.co,co); ps.splice(i,1); DB.set(K.p,ps); CM('mlv'); atualizarKanbanEAlertas(); toast("✅ Pedido Finalizado e Arquivado!");
+  // Keep the existing completion/payment policy. Changing it is a separate
+  // commercial decision; stock checks always happen before any receipt.
+  if(!ped.pago){const rest=subtractMoney(ped.valor,ped.sinal);if(rest>0){ped.restVId='v_'+uid();state[K.v].unshift({id:ped.restVId,cliente:ped.cliente,clienteId:ped.clienteId||null,produto:'Restante - '+ped.desc,categoria:'Vendas',qtd:1,totalBruto:rest,total:rest,pgto:'Dinheiro',data:hj()});}ped.pago=true;}
+  state[K.co].unshift({id:uid(),cliente:ped.cliente,clienteId:ped.clienteId||null,desc:ped.desc,valor:ped.valor,dataConc:hj(),sinalVId:ped.sinalVId||null,restVId:ped.restVId||null,pedOriginal:clone(ped),estId:stockId||null,qtdEst:deducted,estoqueAntes:stockBefore});
+  state[K.p].splice(index,1);
+ },'Pedido finalizado e arquivado!',()=>{CM('mlv');atualizarKanbanEAlertas();});
 }
 
 function renderConc(){
@@ -571,150 +634,158 @@ function renderConc(){
   d = pagList(d, 'cs-pag', 'mudarPagC', 'co');
   const tbc = document.getElementById('tbc');
   if(tbc) {
-    tbc.innerHTML=d.length?d.map(c=>`<tr><td>${fd(c.dataConc)}</td><td><strong>${c.cliente}</strong></td><td>${(c.desc||'').slice(0,55)}</td><td style="color:var(--ok);font-weight:700">${brl(c.valor)}</td>
-    <td><button class="btn bw sm" title="Desfazer e voltar ao Kanban" onclick="desfazerConc('${c.id}')">↩️</button> <button class="btn bd sm" title="Apagar definitivamente" onclick="delConc('${c.id}')">🗑️</button></td></tr>`).join(''):'<tr><td colspan="5" style="text-align:center;">Nenhum concluído</td></tr>';
+    tbc.innerHTML=d.length?d.map(c=>`<tr><td>${fd(c.dataConc)}</td><td><strong>${esc(c.cliente)}</strong></td><td>${esc(String(c.desc||'').slice(0,55))}</td><td style="color:var(--ok);font-weight:700">${brl(c.valor)}</td>
+    <td><button class="btn bw sm" title="Desfazer e voltar ao Kanban" data-action="undo-order" data-id="${esc(c.id)}">↩️</button> <button class="btn bd sm" title="Apagar definitivamente" data-action="delete-completed" data-id="${esc(c.id)}">🗑️</button></td></tr>`).join(''):'<tr><td colspan="5" style="text-align:center;">Nenhum concluído</td></tr>';
   }
 }
 
-function desfazerConc(id) {
-    conf('Desfazer conclusão? O pedido voltará para o Kanban.', () => {
-        const co = DB.get(K.co) || [];
-        const idx = co.findIndex(c => c.id === id);
-        if (idx === -1) return;
-        const item = co[idx];
-        
-        const ps = DB.get(K.p) || [];
-        if(item.pedOriginal) { ps.unshift(item.pedOriginal); } 
-        else { ps.unshift({id: uid(), colId: getCols()[0].id, cliente: item.cliente, desc: item.desc, valor: item.valor, sinal: 0, tel: '', entrega: null, data: hj(), pago: true, entregue: false, sinalVId: null, restVId: null}); }
-        DB.set(K.p, ps);
-        
-        if(item.estId) {
-            let es = DB.get(K.e) || []; let ei = es.findIndex(e => e.id === item.estId);
-            if(ei !== -1) { es[ei].qtd += (item.qtdEst || 1); DB.set(K.e, es); }
-        }
-        
-        co.splice(idx, 1); DB.set(K.co, co); renderConc(); toast('✅ Restaurado para o Kanban!');
-    });
+function desfazerConc(id){
+ conf('Desfazer conclusão? O pedido voltará para o Kanban.',()=>alterar(state=>{
+  const index=state[K.co].findIndex(c=>c.id===id);if(index===-1)invalid('Registro não encontrado.');const item=state[K.co][index];
+  const restored=item.pedOriginal?clone(item.pedOriginal):{id:uid(),colId:getCols()[0].id,cliente:item.cliente,clienteId:item.clienteId||null,desc:item.desc,valor:item.valor,sinal:0,tel:'',entrega:null,data:hj(),pago:true,entregue:false,sinalVId:item.sinalVId||null,restVId:item.restVId||null};
+  if(state[K.p].some(p=>p.id===restored.id))invalid('Este pedido já está no Kanban.');
+  reconcileReceipts(restored,state[K.v]);
+  if(item.estId){const stock=state[K.e].find(e=>e.id===item.estId);if(!stock)invalid('O item de estoque foi excluído. Não é possível desfazer a baixa automaticamente.');const amount=quantity(item.qtdEst??0,'Quantidade anteriormente abatida');if(amount>0&&(item.estoqueAntes==null||amount>quantity(item.estoqueAntes,'Estoque anterior'))){invalid('Esta baixa antiga não possui comprovação da quantidade abatida. Confira o estoque antes de restaurar o pedido.');}stock.qtd=quantity(stock.qtd,'Estoque atual')+amount;if(!Number.isSafeInteger(stock.qtd))invalid('Quantidade de estoque fora do limite.');}
+  state[K.p].unshift(restored);state[K.co].splice(index,1);
+ },'Pedido restaurado para o Kanban!',()=>{renderConc();atualizarKanbanEAlertas();}));
 }
-
-function delConc(id){conf('Excluir registro permanentemente?',()=>{DB.set(K.co,DB.get(K.co).filter(x=>x.id!==id));renderConc();toast('Excluído!');});}
+function delConc(id){conf('Excluir registro permanentemente?',()=>alterar(state=>{state[K.co]=state[K.co].filter(c=>c.id!==id);},'Registro excluído.',renderConc));}
+function reconcileReceipts(order,sales){
+ if(order.sinalVId&&!sales.some(v=>v.id===order.sinalVId)){order.sinal=0;order.sinalVId=null;order.pago=false;}
+ if(order.restVId&&!sales.some(v=>v.id===order.restVId)){order.restVId=null;order.pago=false;}
+}
 
 // ── 6. VENDAS MANUAIS ──
-function calcV(){document.getElementById('vt').value=(Number(gv('vu')||0)*Number(gv('vq')||1)).toFixed(2);}
-function salvarV(){
-  const p=gv('vp').trim();if(!p)return toast('Preencha o produto ou serviço!',true);
-  const vs=DB.get(K.v)||[];
-  let bruto = Number(gv('vt')||0); let pg = gv('vpg');
-  let liq = calcLiq(bruto, pg);
-  vs.unshift({id:uid(),cliente:gv('vc').trim(),produto:p,categoria:gv('vcat'),qtd:Number(gv('vq')||1),totalBruto:bruto, total:liq, pgto:pg, data:gv('vd')||hj()});
-  DB.set(K.v,vs); limV(); renderV(); toast('Venda salva!');
+function calcV(){
+ const quantity=Number(gv('vq')),unit=Number(gv('vu'));
+ document.getElementById('vt').value=Number.isSafeInteger(quantity)&&quantity>0&&Number.isFinite(unit)&&unit>=0?(quantity*cents(unit)/100).toFixed(2):'';
 }
-function limV(){document.getElementById('vp').value='';document.getElementById('vt').value='';document.getElementById('vc').value='';document.getElementById('vu').value='';document.getElementById('vq').value='1';}
+function salvarV(){return alterar(state=>{
+ const product=required(gv('vp'),'o produto ou serviço'),qty=quantity(gv('vq'),'Quantidade',1),unit=money(gv('vu'),'Valor unitário');
+ const grossCents=qty*cents(unit);if(!Number.isSafeInteger(grossCents))invalid('O total da venda ultrapassa o limite permitido.');const gross=grossCents/100;
+ const method=payment(gv('vpg')),category=choice(gv('vcat'),[...APP_CONFIG.categorias_vendas,'Ajuste de caixa']),date=validDate(gv('vd')||hj());
+ const name=gv('vc').trim(),client=name?clientFor(state,name,'',gv('vcliente-id')):null;
+ state[K.v].unshift({id:uid(),cliente:client?.nome||'',clienteId:client?.id||null,produto:product,categoria:category,qtd:qty,totalBruto:gross,total:calcLiq(gross,method),pgto:method,data:date});
+},'Venda salva!',()=>{limV();updDL();renderV();});}
+
+function limV(){document.getElementById('vcliente-id').value='';document.getElementById('vp').value='';document.getElementById('vt').value='';document.getElementById('vc').value='';document.getElementById('vu').value='';document.getElementById('vq').value='1';}
 
 function renderV(){
   const b=gv('fvb').toLowerCase(); 
-  let d=(DB.get(K.v)||[]).filter(v=>!b||v.cliente.toLowerCase().includes(b)||v.produto.toLowerCase().includes(b));
+  let d=(DB.get(K.v)||[]).filter(v=>!b||String(v.cliente||'').toLowerCase().includes(b)||String(v.produto||'').toLowerCase().includes(b));
   d = pagList(d, 'v-pag', 'mudarPagV', 'v');
   const tbv = document.getElementById('tbv');
   if(tbv) {
-    tbv.innerHTML=d.length?d.map(v=>`<tr><td>${fd(v.data)}</td><td>${v.cliente}</td><td>${v.produto}</td><td>${v.categoria||'-'}</td><td>${v.qtd||1}</td><td><span class="bj p">${v.pgto||'-'}</span></td><td><b>${(v.totalBruto && v.totalBruto>v.total) ? brlLq(v.totalBruto, v.total) : brl(v.total)}</b></td><td><button class="btn bd sm" onclick="delV('${v.id}')">🗑️</button></td></tr>`).join(''):'<tr><td colspan="8" style="text-align:center;">Nenhuma venda encontrada</td></tr>';
+    tbv.innerHTML=d.length?d.map(v=>`<tr><td>${fd(v.data)}</td><td>${esc(v.cliente)}</td><td>${esc(v.produto)}</td><td>${esc(v.categoria||'-')}</td><td>${esc(v.qtd||1)}</td><td><span class="bj p">${esc(v.pgto||'-')}</span></td><td><b>${(v.totalBruto && v.totalBruto>v.total) ? brlLq(v.totalBruto, v.total) : brl(v.total)}</b></td><td><button class="btn bd sm" data-action="delete-sale" data-id="${esc(v.id)}">🗑️</button></td></tr>`).join(''):'<tr><td colspan="8" style="text-align:center;">Nenhuma venda encontrada</td></tr>';
   }
 }
 
-function delV(id){
-    conf('Excluir venda?',()=>{
-        let ps = DB.get(K.p) || [];
-        let mod = false;
-        ps.forEach(p => {
-            if(p.sinalVId === id) { p.sinal = 0; p.sinalVId = null; mod = true; }
-            if(p.restVId === id) { p.pago = false; p.restVId = null; mod = true; }
-        });
-        if(mod) { DB.set(K.p, ps); atualizarKanbanEAlertas(); }
-
-        DB.set(K.v,DB.get(K.v).filter(x=>x.id!==id));
-        renderV(); toast('Venda excluída!');
-    });
-}
+function delV(id){conf('Excluir venda?',()=>alterar(state=>{
+ state[K.v]=state[K.v].filter(v=>v.id!==id);
+ const detach=order=>{
+  if(order.sinalVId===id){order.sinal=0;order.sinalVId=null;order.pago=false;}
+  if(order.restVId===id){order.restVId=null;order.pago=false;}
+ };
+ state[K.p].forEach(detach);
+ state[K.co].forEach(item=>{detach(item);if(item.pedOriginal)detach(item.pedOriginal);});
+},'Venda excluída.',()=>{renderV();atualizarKanbanEAlertas();}));}
 
 // ── 7. COMPRAS E DESPESAS ──
-function salvarC(){
-  const f=gv('cf').trim();if(!f)return toast('Descrição obrigatória!',true);
-  const cs=DB.get(K.c)||[];
-  cs.unshift({id:uid(),fornecedor:f,categoria:gv('ccat'),valor:Number(gv('cv')||0),pgto:gv('cpg'),data:gv('cd')||hj()});
-  DB.set(K.c,cs); limC(); renderC(); toast('Lançamento salvo!');
-}
+function salvarC(){return alterar(state=>{
+ const description=required(gv('cf'),'a descrição'),value=money(gv('cv'),'Valor');if(value===0)invalid('Informe uma despesa maior que zero.');
+ const category=choice(gv('ccat'),[...APP_CONFIG.categorias_despesas,'Ajuste de caixa','Retirada Pessoal','Pró-labore']),method=choice(gv('cpg'),APP_CONFIG.pagamentos_compras),date=validDate(gv('cd')||hj());
+ state[K.c].unshift({id:uid(),fornecedor:description,categoria:category,valor:value,pgto:method,data:date});
+},'Lançamento salvo!',()=>{limC();renderC();});}
+
 function limC(){document.getElementById('cf').value='';document.getElementById('cv').value='';}
 function renderC(){
   const b=gv('fcb').toLowerCase(); 
-  let d=(DB.get(K.c)||[]).filter(c=>!b||c.fornecedor.toLowerCase().includes(b));
+  let d=(DB.get(K.c)||[]).filter(c=>!b||String(c.fornecedor||'').toLowerCase().includes(b));
   d = pagList(d, 'c-pag', 'mudarPagCom', 'c');
   const tbc2 = document.getElementById('tbc2');
   if(tbc2) {
-    tbc2.innerHTML=d.length?d.map(c=>`<tr><td>${fd(c.data)}</td><td>${c.fornecedor}</td><td>${c.categoria}</td><td style="color:var(--no);font-weight:700">${brl(c.valor)}</td><td>${c.pgto||'-'}</td><td><button class="btn bd sm" onclick="delC('${c.id}')">🗑️</button></td></tr>`).join(''):'<tr><td colspan="6" style="text-align:center;">Nenhum lançamento</td></tr>';
+    tbc2.innerHTML=d.length?d.map(c=>`<tr><td>${fd(c.data)}</td><td>${esc(c.fornecedor)}</td><td>${esc(c.categoria)}</td><td style="color:var(--no);font-weight:700">${brl(c.valor)}</td><td>${esc(c.pgto||'-')}</td><td><button class="btn bd sm" data-action="delete-expense" data-id="${esc(c.id)}">🗑️</button></td></tr>`).join(''):'<tr><td colspan="6" style="text-align:center;">Nenhum lançamento</td></tr>';
   }
 }
-function delC(id){conf('Excluir lançamento?',()=>{DB.set(K.c,DB.get(K.c).filter(x=>x.id!==id));renderC();});}
+function delC(id){conf('Excluir lançamento?',()=>alterar(state=>{state[K.c]=state[K.c].filter(x=>x.id!==id);},'Lançamento excluído.',renderC));}
 
 // ── 8. ESTOQUE ──
-function salvarE(){
-  const n=gv('en').trim();if(!n)return toast('Item obrigatório!',true);
-  const es=DB.get(K.e)||[];
-  es.unshift({id:uid(),nome:n,categoria:gv('ecat'),qtd:Number(gv('eq')||0),min:Number(gv('em')||0),custo:Number(gv('ec')||0),preco:Number(gv('ep2')||0)});
-  DB.set(K.e,es); limE(); renderE(); toast('Item salvo no estoque!');
-}
+function salvarE(){return alterar(state=>{
+ const name=required(gv('en'),'o nome do item'),qty=quantity(gv('eq'),'Quantidade'),min=quantity(gv('em'),'Quantidade mínima');
+ const cost=money(gv('ec'),'Custo',true),price=money(gv('ep2'),'Preço',true),category=choice(gv('ecat'),APP_CONFIG.categorias_estoque);
+ state[K.e].unshift({id:uid(),nome:name,categoria:category,qtd:qty,min,custo:cost,preco:price});
+},'Item salvo no estoque!',()=>{limE();renderE();});}
+
 function limE(){document.getElementById('en').value='';document.getElementById('eq').value='0';document.getElementById('ec').value='';document.getElementById('ep2').value='';}
 function renderE(){
   const b=gv('feb').toLowerCase(); 
-  let d=(DB.get(K.e)||[]).filter(e=>!b||e.nome.toLowerCase().includes(b));
+  let d=(DB.get(K.e)||[]).filter(e=>!b||String(e.nome||'').toLowerCase().includes(b));
   d = pagList(d, 'e-pag', 'mudarPagE', 'e');
   const tbe = document.getElementById('tbe');
   if(tbe) {
-    tbe.innerHTML=d.length?d.map(e=>`<tr><td><strong>${e.nome}</strong></td><td>${e.categoria||'-'}</td><td style="${e.qtd<=e.min?'color:var(--no);font-weight:700':''}">${e.qtd}</td><td>${e.min}</td><td>${brl(e.custo)}</td><td>${brl(e.preco)}</td><td><button class="btn bd sm" onclick="delE('${e.id}')">🗑️</button></td></tr>`).join(''):'<tr><td colspan="7" style="text-align:center;">Nenhum item</td></tr>';
+    tbe.innerHTML=d.length?d.map(e=>`<tr><td><strong>${esc(e.nome)}</strong></td><td>${esc(e.categoria||'-')}</td><td style="${e.qtd<=e.min?'color:var(--no);font-weight:700':''}">${esc(e.qtd)}</td><td>${esc(e.min)}</td><td>${brl(e.custo)}</td><td>${brl(e.preco)}</td><td><button class="btn bd sm" data-action="delete-stock" data-id="${esc(e.id)}">🗑️</button></td></tr>`).join(''):'<tr><td colspan="7" style="text-align:center;">Nenhum item</td></tr>';
   }
 }
-function delE(id){conf('Excluir item?',()=>{DB.set(K.e,DB.get(K.e).filter(x=>x.id!==id));renderE();});}
+function delE(id){conf('Excluir item?',()=>alterar(state=>{
+ if(state[K.co].some(item=>item.estId===id))invalid('Este item possui baixas vinculadas a pedidos arquivados e não pode ser excluído.');
+ state[K.e]=state[K.e].filter(x=>x.id!==id);
+},'Item excluído.',renderE));}
 
 // ── 9. CLIENTES ──
-function salvarCl(){
-  const n=gv('cln').trim();if(!n)return toast('Nome obrigatório!',true);
-  const cls=DB.get(K.cl)||[];
-  cls.unshift({id:uid(),nome:n,tel:gv('clt').trim(),cidade:gv('clc').trim()});
-  DB.set(K.cl,cls); limCl(); renderCl(); toast('Cliente salvo!');
-}
-function limCl(){document.getElementById('cln').value='';document.getElementById('clt').value='';document.getElementById('clc').value='';}
+function salvarCl(){return alterar(state=>{
+ const name=required(gv('cln'),'o nome do cliente'),email=gv('cle').trim();
+ if(email&&!validEmail(email))invalid('Informe um e-mail válido.');
+ const homonyms=state[K.cl].filter(c=>c.nome===name);if(homonyms.length===1)linkLegacyClient(state,homonyms[0]);
+ state[K.cl].unshift({id:uid(),nome:name,tel:gv('clt').trim(),cidade:gv('clc').trim(),email});
+},'Cliente salvo!',()=>{limCl();updDL();renderCl();});}
+
+function limCl(){document.getElementById('cle').value='';document.getElementById('cln').value='';document.getElementById('clt').value='';document.getElementById('clc').value='';}
 function renderCl(){
   const b=gv('fclb').toLowerCase();
-  let d=(DB.get(K.cl)||[]).filter(c=>!b||c.nome.toLowerCase().includes(b)||(c.tel&&c.tel.includes(b)));
+  let d=(DB.get(K.cl)||[]).filter(c=>!b||String(c.nome||'').toLowerCase().includes(b)||(c.tel&&String(c.tel).includes(b)));
   d = pagList(d, 'cl-pag', 'mudarPagCl', 'cl');
   const tbcl = document.getElementById('tbcl');
   if(tbcl) {
-    tbcl.innerHTML=d.length?d.map(c=>`<tr><td><strong>${c.nome}</strong></td><td>${c.tel||'-'}</td><td>${c.cidade||'-'}</td><td><button class="btn bp sm" onclick="verHist('${c.nome}')">👁️ Histórico</button> <button class="btn bd sm" onclick="delCl('${c.id}')">🗑️</button></td></tr>`).join(''):'<tr><td colspan="4" style="text-align:center;">Nenhum cliente encontrado</td></tr>';
+    tbcl.innerHTML=d.length?d.map(c=>`<tr><td><strong>${esc(c.nome)}</strong></td><td>${esc(c.tel||'-')}</td><td>${esc(c.email||'-')}</td><td>${esc(c.cidade||'-')}</td><td><button class="btn bp sm" data-action="client-history" data-id="${esc(c.id)}">👁️ Histórico</button> <button class="btn bd sm" data-action="delete-client" data-id="${esc(c.id)}">🗑️</button></td></tr>`).join(''):'<tr><td colspan="5" style="text-align:center;">Nenhum cliente encontrado</td></tr>';
   }
 }
-function delCl(id){conf('Excluir cliente permanentemente?',()=>{DB.set(K.cl,DB.get(K.cl).filter(x=>x.id!==id));renderCl();});}
-function verHist(nome){
-  document.getElementById('mhctt').textContent=`👁️ Histórico: ${nome}`;
-  const ps=(DB.get(K.p)||[]).filter(p=>p.cliente===nome).map(x=>({...x,st:'Em Aberto'}));
-  const co=(DB.get(K.co)||[]).filter(c=>c.cliente===nome).map(x=>({...x,st:'Concluído',data:x.dataConc}));
-  const h=[...ps,...co].sort((a,b)=>b.data.localeCompare(a.data));
-  document.getElementById('tbhc').innerHTML=h.length?h.map(x=>`<tr><td>${fd(x.data)}</td><td>${(x.desc||'').slice(0,40)}...</td><td style="font-weight:700">${brl(x.valor)}</td><td><span class="bj ${x.st==='Concluído'?'g':'o'}">${x.st}</span></td></tr>`).join(''):'<tr><td colspan="4" style="text-align:center;">Nenhum pedido registrado para este cliente.</td></tr>';
-  OM('mhc');
+function delCl(id){conf('Excluir cliente permanentemente?',()=>alterar(state=>{
+ const client=state[K.cl].find(c=>c.id===id);if(!client)invalid('Cliente não encontrado.');
+ // Preserve unambiguous legacy associations so a new homonym cannot inherit them.
+ if(state[K.cl].filter(c=>c.nome===client.nome).length===1){
+  const link=record=>{if(!record.clienteId&&record.cliente===client.nome)record.clienteId=id;};
+  state[K.p].forEach(link);state[K.v].forEach(link);state[K.co].forEach(item=>{link(item);if(item.pedOriginal)link(item.pedOriginal);});
+ }
+ state[K.cl]=state[K.cl].filter(c=>c.id!==id);
+},'Cliente excluído.',()=>{updDL();renderCl();}));}
+function verHist(id){
+ const client=DB.get(K.cl).find(c=>c.id===id);if(!client)return;
+ document.getElementById('mhctt').textContent='Histórico: '+client.nome;
+ const unique=DB.get(K.cl).filter(c=>c.nome===client.nome).length===1;
+ const belongs=record=>record.clienteId?record.clienteId===id:unique&&record.cliente===client.nome;
+ const orders=DB.get(K.p).filter(belongs).map(p=>({...p,st:'Em aberto'}));
+ const completed=DB.get(K.co).filter(belongs).map(p=>({...p,st:'Concluído',data:p.dataConc}));
+ const history=[...orders,...completed].sort((a,b)=>String(b.data||'').localeCompare(String(a.data||'')));
+ document.getElementById('history-warning').hidden=unique;
+ document.getElementById('tbhc').innerHTML=history.length?history.map(x=>`<tr><td>${fd(x.data)}</td><td>${esc(String(x.desc||'').slice(0,40))}</td><td>${brl(x.valor)}</td><td>${esc(x.st)}</td></tr>`).join(''):'<tr><td colspan="4">Nenhum pedido identificado para este cliente.</td></tr>';
+ OM('mhc');
 }
 
 // ── 10. RELATÓRIOS FINANCEIROS ──
 function setRDates(){const d=new Date();const y=d.getFullYear(),m=(d.getMonth()+1).toString().padStart(2,'0');document.getElementById('rde').value=`${y}-${m}-01`;document.getElementById('rat').value=hj();}
 function gerarR(reset = true){
   if(reset) cp.r = 1;
-  const de=gv('rde'),at=gv('rat'); if(!de||!at) return;
+  const de=gv('rde'),at=gv('rat'); if(!de||!at)return;
+  try{validDate(de);validDate(at);if(de>at)invalid('A data inicial deve ser anterior ou igual à data final.');}catch(error){toast(error.userMessage||'Informe datas válidas.',true);return;}
   const vs=(DB.get(K.v)||[]).filter(v=>v.data>=de&&v.data<=at);
   const cs=(DB.get(K.c)||[]).filter(c=>c.data>=de&&c.data<=at);
   
-  const fat = vs.filter(v => v.categoria !== 'Ajuste de caixa').reduce((a,b)=>a+Number(b.total),0); 
-  const custosLoja = cs.filter(c=>!['Retirada Pessoal','Pró-labore', 'Ajuste de caixa'].includes(c.categoria)).reduce((a,b)=>a+Number(b.valor),0);
-  const retiradas = cs.filter(c=>['Retirada Pessoal','Pró-labore'].includes(c.categoria)).reduce((a,b)=>a+Number(b.valor),0);
+  const fat = vs.filter(v => v.categoria !== 'Ajuste de caixa').reduce((a,b)=>a+cents(b.total),0)/100;
+  const custosLoja = cs.filter(c=>!['Retirada Pessoal','Pró-labore', 'Ajuste de caixa'].includes(c.categoria)).reduce((a,b)=>a+cents(b.valor),0)/100;
+  const retiradas = cs.filter(c=>['Retirada Pessoal','Pró-labore'].includes(c.categoria)).reduce((a,b)=>a+cents(b.valor),0)/100;
   
-  const ajustesPos = vs.filter(v => v.categoria === 'Ajuste de caixa').reduce((a,b)=>a+Number(b.total),0);
-  const ajustesNeg = cs.filter(c => c.categoria === 'Ajuste de caixa').reduce((a,b)=>a+Number(b.valor),0);
+  const ajustesPos = vs.filter(v => v.categoria === 'Ajuste de caixa').reduce((a,b)=>a+cents(b.total),0)/100;
+  const ajustesNeg = cs.filter(c => c.categoria === 'Ajuste de caixa').reduce((a,b)=>a+cents(b.valor),0)/100;
 
   const lucroNegocio = fat - custosLoja;
   const saldoFinal = (lucroNegocio + ajustesPos) - (retiradas + ajustesNeg);
@@ -727,6 +798,20 @@ function gerarR(reset = true){
   movs = pagList(movs, 'r-pag', 'mudarPagR', 'r');
   const tbrv = document.getElementById('tbrv');
   if(tbrv) {
-    tbrv.innerHTML=movs.length?movs.map(m=>`<tr><td>${fd(m.d)}</td><td><span class="bj ${m.s>0?'g':((m.t||'').includes('Retirada')||(m.t||'').includes('Pró-labore')?'o':'r')}">${m.cat === 'Ajuste de caixa' ? 'Ajuste de Caixa' : (m.t||'Geral')}</span><br><small style="color:var(--tl)">${m.pg||''}</small></td><td>${m.desc||'-'}</td><td style="font-weight:700; color:${m.s>0?'var(--ok)':'var(--no)'}">${m.s>0?'+':'-'} ${(m.b && m.b > m.v) ? brlLq(m.b, m.v) : brl(m.v)}</td></tr>`).join(''):'<tr><td colspan="4" style="text-align:center;">Sem dados no período</td></tr>';
+    tbrv.innerHTML=movs.length?movs.map(m=>`<tr><td>${fd(m.d)}</td><td><span class="bj ${m.s>0?'g':((m.t||'').includes('Retirada')||(m.t||'').includes('Pró-labore')?'o':'r')}">${esc(m.cat==='Ajuste de caixa'?'Ajuste de Caixa':m.t||'Geral')}</span></td><td>${esc(m.desc||'-')}</td><td>${esc(m.pg||'-')}</td><td style="font-weight:700;color:${m.s>0?'var(--ok)':'var(--no)'}">${m.s>0?'+':'-'} ${(m.b&&m.b>m.v)?brlLq(m.b,m.v):brl(m.v)}</td></tr>`).join(''):'<tr><td colspan="5" style="text-align:center;">Sem dados no período</td></tr>';
   }
 }
+
+
+// Record IDs and names are data, never inline JavaScript.
+document.addEventListener('click',event=>{
+ const target=event.target.closest('[data-action]');if(!target)return;
+ const actions={'delete-sale':delV,'delete-expense':delC,'delete-stock':delE,'undo-order':desfazerConc,'delete-completed':delConc,'delete-client':delCl,'client-history':verHist,'delete-column':delCol};
+ if(target.dataset.action==='copy-phone'){event.stopPropagation();copiarTexto(event,target.dataset.phone);return;}
+ actions[target.dataset.action]?.(target.dataset.id);
+});
+document.addEventListener('dblclick',event=>{const target=event.target.closest('[data-rename-col]');if(target)abrRnc(target.dataset.renameCol);});
+auth.onAuthStateChanged(user=>{
+ if(user) iniciarApp();
+ else {clearSession();document.getElementById('loader').classList.add('off');document.getElementById('app-container').style.display='none';document.getElementById('login-screen').style.display='flex';}
+});
